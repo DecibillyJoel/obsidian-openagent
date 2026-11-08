@@ -19,6 +19,7 @@ function createDeps(activeSession: {
 	selectedPackId: string | null;
 	lastClassicModel: string;
 	textModel?: string | null;
+	imageModel?: string | null;
 	turns?: unknown[];
 	recovery?: {
 		reason: "turns-corrupt";
@@ -1015,6 +1016,89 @@ describe("ChatView pack UI", () => {
 			"catalog-a",
 		]);
 		expect(groupLabelsOf(select)).toEqual(["All models"]);
+	});
+
+	it("keeps a stored text model the catalog missed", () => {
+		const app = createMockApp();
+		const { deps } = createDeps({
+			id: "session-a",
+			model: "session-model",
+			textModel: "gone-model",
+			selectedPackId: null,
+			lastClassicModel: "session-model",
+		});
+		deps.getSettings = () => ({ ...DEFAULT_SETTINGS, apiKey: "token", model: "gpt-4o-mini" });
+		const view = new ChatView({ app } as never, deps);
+		const select = new MockElement("select");
+		Object.assign(view as unknown as Record<string, unknown>, {
+			modelInputEl: select,
+			textModelCatalog: ["gpt-4o-mini", "catalog-a"],
+		});
+		(view as unknown as { refreshTextModelOptions(): void }).refreshTextModelOptions();
+		expect(select.value).toBe("gone-model");
+		expect(optionValuesOf(select)).toEqual(["", "gone-model", "gpt-4o-mini", "gpt-4o-mini", "catalog-a"]);
+	});
+
+	it("keeps a stored default text model the catalog missed", () => {
+		const app = createMockApp();
+		const { deps } = createDeps({
+			id: "session-a",
+			model: "gone-global",
+			selectedPackId: null,
+			lastClassicModel: "gone-global",
+		});
+		deps.getSettings = () => ({ ...DEFAULT_SETTINGS, apiKey: "token", model: "gone-global" });
+		const view = new ChatView({ app } as never, deps);
+		const select = new MockElement("select");
+		Object.assign(view as unknown as Record<string, unknown>, {
+			modelInputEl: select,
+			textModelCatalog: ["catalog-a"],
+		});
+		(view as unknown as { refreshTextModelOptions(): void }).refreshTextModelOptions();
+		expect(select.children[0]?.textContent).toBe("Default: gone-global");
+		expect(optionValuesOf(select)).toEqual(["", "gone-global", "catalog-a"]);
+	});
+
+	it("still drops a stored text model that cannot serve text", () => {
+		const app = createMockApp();
+		const { deps } = createDeps({
+			id: "session-a",
+			model: "session-model",
+			textModel: "catalog-a:batch",
+			selectedPackId: null,
+			lastClassicModel: "session-model",
+		});
+		deps.getSettings = () => ({ ...DEFAULT_SETTINGS, apiKey: "token", model: "gpt-4o-mini" });
+		const view = new ChatView({ app } as never, deps);
+		const select = new MockElement("select");
+		Object.assign(view as unknown as Record<string, unknown>, {
+			modelInputEl: select,
+			textModelCatalog: ["gpt-4o-mini", "catalog-a"],
+		});
+		(view as unknown as { refreshTextModelOptions(): void }).refreshTextModelOptions();
+		expect(select.value).toBe("");
+		expect(optionValuesOf(select)).toEqual(["", "gpt-4o-mini", "gpt-4o-mini", "catalog-a"]);
+	});
+
+	it("keeps a stored image model the catalog missed", () => {
+		const app = createMockApp();
+		const { deps } = createDeps({
+			id: "session-a",
+			model: "session-model",
+			imageModel: "gone-image",
+			selectedPackId: null,
+			lastClassicModel: "session-model",
+		});
+		deps.getSettings = () => ({ ...DEFAULT_SETTINGS, apiKey: "token", imageModel: "img-a" });
+		const view = new ChatView({ app } as never, deps);
+		const imageSelect = new MockElement("select");
+		Object.assign(view as unknown as Record<string, unknown>, {
+			imageModelInputEl: imageSelect,
+			imageModelCatalog: ["img-a"],
+		});
+		(view as unknown as { refreshImageModelOptions(): void }).refreshImageModelOptions();
+		expect(imageSelect.value).toBe("gone-image");
+		expect(optionValuesOf(imageSelect)).toEqual(["", "gone-image", "img-a", "img-a"]);
 	});
 
 	it("shows a category section above the full list and disables a missing member", () => {

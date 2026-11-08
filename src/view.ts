@@ -5,7 +5,7 @@ import { diffLines, type DiffRow } from "./consent/diff";
 import { renderRows } from "./consent/render-diff";
 import { runTurn } from "./loop";
 import { isMobile } from "./platform";
-import { OpenAICompatibleProvider, oaFetchModelIds } from "./provider";
+import { OpenAICompatibleProvider, oaFetchModelIds, oaModelEligibleOrUnknown } from "./provider";
 import { resolveCitationTarget } from "./citations";
 import {
 	oaDetectImageMime,
@@ -593,8 +593,9 @@ export class ChatView extends ItemView {
 		let selected = this.getSessionTextOverride(session, settings);
 		let global = settings.model?.trim() ?? "";
 		if (this.textModelCatalog.length > 0) {
-			if (!this.textModelCatalog.includes(selected)) selected = "";
-			if (!this.textModelCatalog.includes(global)) global = "";
+			// Keep a stored model the fetch missed, the way the settings dropdown does.
+			if (!this.textModelCatalog.includes(selected) && !oaModelEligibleOrUnknown(selected, "text")) selected = "";
+			if (!this.textModelCatalog.includes(global) && !oaModelEligibleOrUnknown(global, "text")) global = "";
 		}
 		const pseudo: ModelSelectPseudoOption[] = [
 			{ label: global ? `Default: ${global}` : "Default: not configured", value: "" },
@@ -620,12 +621,9 @@ export class ChatView extends ItemView {
 		settings: PluginSettings = this.deps.getSettings(),
 	): void {
 		if (!this.imageModelInputEl) return;
-		let selected = session.imageModel?.trim() ?? "";
-		let global = settings.imageModel?.trim() ?? "";
-		if (this.imageModelCatalog.length > 0) {
-			if (!this.imageModelCatalog.includes(selected)) selected = "";
-			if (!this.imageModelCatalog.includes(global)) global = "";
-		}
+		// The image chooser keeps any stored id, as the settings dropdown does.
+		const selected = session.imageModel?.trim() ?? "";
+		const global = settings.imageModel?.trim() ?? "";
 		const pseudo: ModelSelectPseudoOption[] = [
 			{ label: global ? `Default: ${global}` : "Default: not configured", value: "" },
 		];
