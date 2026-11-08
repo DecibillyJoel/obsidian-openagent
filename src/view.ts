@@ -25,6 +25,8 @@ import type { ExactPhraseAnchor } from "./agents/verifier";
 import { PackConfigError, PackRunError, type PackRuntimeEvent, type PackRunResult, type PackRunTransparency } from "./packs/runtime";
 import type { AgentPack } from "./packs/types";
 import { isConfigured, type PluginSettings } from "./settings";
+import { oaBuildModelOptionGroups } from "./models/categories";
+import { oaPaintModelSelect, type ModelSelectPseudoOption } from "./models/selectOptions";
 import type {
 	SessionMeta,
 	SessionStore,
@@ -594,14 +596,16 @@ export class ChatView extends ItemView {
 			if (!this.textModelCatalog.includes(selected)) selected = "";
 			if (!this.textModelCatalog.includes(global)) global = "";
 		}
-		const extras = [...this.modelInputEl.options]
-			.map((o) => o.value)
-			.filter((v) => v && v !== selected && v !== global);
-		this.modelInputEl.empty();
-		this.modelInputEl.add(new Option(global ? `Default: ${global}` : "Default: not configured", ""));
-		if (selected) this.modelInputEl.add(new Option(selected, selected));
-		if (global && global !== selected) this.modelInputEl.add(new Option(global, global));
-		for (const value of extras) this.modelInputEl.add(new Option(value, value));
+		const pseudo: ModelSelectPseudoOption[] = [
+			{ label: global ? `Default: ${global}` : "Default: not configured", value: "" },
+		];
+		if (selected) pseudo.push({ label: selected, value: selected });
+		if (global && global !== selected) pseudo.push({ label: global, value: global });
+		oaPaintModelSelect(
+			this.modelInputEl,
+			pseudo,
+			oaBuildModelOptionGroups(this.textModelCatalog, settings.modelCategories),
+		);
 		this.modelInputEl.value = selected;
 	}
 
@@ -622,14 +626,16 @@ export class ChatView extends ItemView {
 			if (!this.imageModelCatalog.includes(selected)) selected = "";
 			if (!this.imageModelCatalog.includes(global)) global = "";
 		}
-		const extras = [...this.imageModelInputEl.options]
-			.map((o) => o.value)
-			.filter((v) => v && v !== selected && v !== global);
-		this.imageModelInputEl.empty();
-		this.imageModelInputEl.add(new Option(global ? `Default: ${global}` : "Default: not configured", ""));
-		if (selected) this.imageModelInputEl.add(new Option(selected, selected));
-		if (global && global !== selected) this.imageModelInputEl.add(new Option(global, global));
-		for (const value of extras) this.imageModelInputEl.add(new Option(value, value));
+		const pseudo: ModelSelectPseudoOption[] = [
+			{ label: global ? `Default: ${global}` : "Default: not configured", value: "" },
+		];
+		if (selected) pseudo.push({ label: selected, value: selected });
+		if (global && global !== selected) pseudo.push({ label: global, value: global });
+		oaPaintModelSelect(
+			this.imageModelInputEl,
+			pseudo,
+			oaBuildModelOptionGroups(this.imageModelCatalog, settings.modelCategories),
+		);
 		this.imageModelInputEl.value = selected;
 	}
 
@@ -775,33 +781,10 @@ export class ChatView extends ItemView {
 		]);
 		if (models.length > 0) {
 			this.textModelCatalog = models;
-			const session = this.deps.sessionStore.getActive();
-			let selected = this.getSessionTextOverride(session, settings);
-			let global = settings.model?.trim() ?? "";
-			if (!models.includes(selected)) selected = "";
-			if (!models.includes(global)) global = "";
-			this.modelInputEl.empty();
-			this.modelInputEl.add(new Option(global ? `Default: ${global}` : "Default: not configured", ""));
-			for (const m of models) this.modelInputEl.add(new Option(m, m));
-			this.modelInputEl.value = selected;
+			this.refreshTextModelOptions();
 		}
-		if (imageModels.length > 0) {
-			this.imageModelCatalog = imageModels;
-			const session = this.deps.sessionStore.getActive();
-			let selected = session.imageModel?.trim() ?? "";
-			let global = settings.imageModel?.trim() ?? "";
-			if (!imageModels.includes(selected)) selected = "";
-			if (!imageModels.includes(global)) global = "";
-			this.imageModelInputEl.empty();
-			this.imageModelInputEl.add(new Option(global ? `Default: ${global}` : "Default: not configured", ""));
-			const options = [...new Set([selected, global, ...imageModels].filter(Boolean))].filter((m) =>
-				imageModels.includes(m),
-			);
-			for (const value of options) this.imageModelInputEl.add(new Option(value, value));
-			this.imageModelInputEl.value = selected;
-		} else {
-			this.refreshImageModelOptions();
-		}
+		if (imageModels.length > 0) this.imageModelCatalog = imageModels;
+		this.refreshImageModelOptions();
 	}
 
 	// ─── Render debounce ─────────────────────────────────────────────────────

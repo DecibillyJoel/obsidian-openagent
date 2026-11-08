@@ -9,6 +9,7 @@ import {
 	MockTFile,
 	NoticeMock,
 	createMockApp,
+	requestUrlMock,
 	setMobileMode,
 } from "./setup";
 
@@ -66,24 +67,17 @@ function textTree(root: MockElement): string {
 		.join(" ");
 }
 
-class MockSelectOption {
-	text: string;
-	value: string;
-	constructor(text: string, value: string) {
-		this.text = text;
-		this.value = value;
+function optionValuesOf(select: MockElement): string[] {
+	const out: string[] = [];
+	for (const child of select.children) {
+		if (child.tagName === "optgroup") out.push(...child.children.map((option) => option.value));
+		else out.push(child.value);
 	}
+	return out;
 }
 
-class MockSelect {
-	options: MockSelectOption[] = [];
-	value = "";
-	empty(): void {
-		this.options = [];
-	}
-	add(option: MockSelectOption): void {
-		this.options.push(option);
-	}
+function groupLabelsOf(select: MockElement): string[] {
+	return select.children.filter((child) => child.tagName === "optgroup").map((group) => group.attrs.label ?? "");
 }
 
 function renderPackTurn(view: ChatView, packTurn: StoredPackTurnData): MockElement {
@@ -995,7 +989,7 @@ describe("ChatView pack UI", () => {
 		expect(banners[0]?.textContent).toContain("sessions/session-a.corrupt-123.json");
 	});
 
-	it("orders text model options as default, override, global, then catalog", () => {
+	it("orders text model options as default, override, global, then the full list", () => {
 		const app = createMockApp();
 		const { deps } = createDeps({
 			id: "session-a",
@@ -1006,24 +1000,99 @@ describe("ChatView pack UI", () => {
 		});
 		deps.getSettings = () => ({ ...DEFAULT_SETTINGS, apiKey: "token", model: "gpt-4o-mini" });
 		const view = new ChatView({ app } as never, deps);
-		const select = new MockSelect();
-		select.options = [
-			new MockSelectOption("Default: gpt-4o-mini", ""),
-			new MockSelectOption("gpt-4o-mini", "gpt-4o-mini"),
-			new MockSelectOption("catalog-a", "catalog-a"),
-			new MockSelectOption("override-model", "override-model"),
-		];
+		const select = new MockElement("select");
 		Object.assign(view as unknown as Record<string, unknown>, {
 			modelInputEl: select,
 			textModelCatalog: ["gpt-4o-mini", "override-model", "catalog-a"],
 		});
-		vi.stubGlobal("Option", MockSelectOption);
-		try {
-			(view as unknown as { refreshTextModelOptions(): void }).refreshTextModelOptions();
-		} finally {
-			vi.unstubAllGlobals();
-		}
-		expect(select.options.map((o) => o.value)).toEqual(["", "override-model", "gpt-4o-mini", "catalog-a"]);
+		(view as unknown as { refreshTextModelOptions(): void }).refreshTextModelOptions();
+		expect(optionValuesOf(select)).toEqual([
+			"",
+			"override-model",
+			"gpt-4o-mini",
+			"gpt-4o-mini",
+			"override-model",
+			"catalog-a",
+		]);
+		expect(groupLabelsOf(select)).toEqual(["All models"]);
+	});
+
+	it("shows a category section above the full list and disables a missing member", () => {
+		const app = createMockApp();
+		const { deps } = createDeps({
+			id: "session-a",
+			model: "session-model",
+			textModel: "override-model",
+			selectedPackId: null,
+			lastClassicModel: "session-model",
+		});
+		deps.getSettings = () => ({
+			...DEFAULT_SETTINGS,
+			apiKey: "token",
+			model: "gpt-4o-mini",
+			modelCategories: [
+				{ id: "cat-1", name: "Favourites", models: ["catalog-a", "gone"] },
+				{ id: "cat-2", name: "Images", models: ["only-an-image-id"] },
+			],
+		});
+		const view = new ChatView({ app } as never, deps);
+		const select = new MockElement("select");
+		Object.assign(view as unknown as Record<string, unknown>, {
+			modelInputEl: select,
+			textModelCatalog: ["gpt-4o-mini", "override-model", "catalog-a"],
+		});
+		(view as unknown as { refreshTextModelOptions(): void }).refreshTextModelOptions();
+		// The image-only category adds no section here: none of its members is in the text catalog.
+		expect(groupLabelsOf(select)).toEqual(["Favourites", "All models"]);
+		expect(optionValuesOf(select)).toEqual([
+			"",
+			"override-model",
+			"gpt-4o-mini",
+			"catalog-a",
+			"gone",
+			"gpt-4o-mini",
+			"override-model",
+			"catalog-a",
+		]);
+		const gone = select.children[3]?.children[1];
+		expect(gone?.disabled).toBe(true);
+	});
+
+	it("fills both catalogs from one fetch and paints the sections", async () => {
+		const app = createMockApp();
+		const { deps } = createDeps({
+			id: "session-a",
+			model: "session-model",
+			selectedPackId: null,
+			lastClassicModel: "session-model",
+		});
+		deps.getSettings = () => ({
+			...DEFAULT_SETTINGS,
+			baseUrl: "https://example.test/v1",
+			apiKey: "token",
+			model: "m-text",
+			modelCategories: [{ id: "cat-1", name: "Favourites", models: ["m-image"] }],
+		});
+		const view = new ChatView({ app } as never, deps);
+		const select = new MockElement("select");
+		const imageSelect = new MockElement("select");
+		Object.assign(view as unknown as Record<string, unknown>, {
+			modelInputEl: select,
+			imageModelInputEl: imageSelect,
+		});
+		requestUrlMock.mockResolvedValue({
+			status: 200,
+			text: JSON.stringify({
+				data: [
+					{ id: "m-text", architecture: { output_modalities: ["text"] } },
+					{ id: "m-image", architecture: { output_modalities: ["image"] } },
+				],
+			}),
+		});
+		await (view as unknown as { populateModelDatalist(): Promise<void> }).populateModelDatalist();
+		expect((view as unknown as { textModelCatalog: string[] }).textModelCatalog).toEqual(["m-text"]);
+		expect(optionValuesOf(imageSelect)).toContain("m-image");
+		expect(groupLabelsOf(imageSelect)).toEqual(["Favourites", "All models"]);
 	});
 
 	it("falls back to the classic model for legacy sessions without a text override", () => {
