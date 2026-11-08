@@ -1031,8 +1031,8 @@ describe("ChatView pack UI", () => {
 			apiKey: "token",
 			model: "gpt-4o-mini",
 			modelCategories: [
-				{ id: "cat-1", name: "Favourites", models: ["catalog-a", "gone"] },
-				{ id: "cat-2", name: "Images", models: ["only-an-image-id"] },
+				{ id: "cat-1", name: "Favourites", kind: "text", models: ["catalog-a", "gone"] },
+				{ id: "cat-2", name: "Images", kind: "image", models: ["only-an-image-id"] },
 			],
 		});
 		const view = new ChatView({ app } as never, deps);
@@ -1071,7 +1071,7 @@ describe("ChatView pack UI", () => {
 			baseUrl: "https://example.test/v1",
 			apiKey: "token",
 			model: "m-text",
-			modelCategories: [{ id: "cat-1", name: "Favourites", models: ["m-image"] }],
+			modelCategories: [{ id: "cat-1", name: "Favourites", kind: "image", models: ["m-image"] }],
 		});
 		const view = new ChatView({ app } as never, deps);
 		const select = new MockElement("select");
@@ -1093,6 +1093,38 @@ describe("ChatView pack UI", () => {
 		expect((view as unknown as { textModelCatalog: string[] }).textModelCatalog).toEqual(["m-text"]);
 		expect(optionValuesOf(imageSelect)).toContain("m-image");
 		expect(groupLabelsOf(imageSelect)).toEqual(["Favourites", "All models"]);
+	});
+
+	it("shows only same-kind categories in each chat dropdown", () => {
+		const app = createMockApp();
+		const { deps } = createDeps({
+			id: "session-a",
+			model: "session-model",
+			selectedPackId: null,
+			lastClassicModel: "session-model",
+		});
+		deps.getSettings = () => ({
+			...DEFAULT_SETTINGS,
+			apiKey: "token",
+			model: "m-text",
+			modelCategories: [
+				{ id: "cat-text", name: "Writing", kind: "text", models: ["m-text"] },
+				{ id: "cat-image", name: "Pictures", kind: "image", models: ["m-image"] },
+			],
+		});
+		const view = new ChatView({ app } as never, deps);
+		const textSelect = new MockElement("select");
+		const imageSelect = new MockElement("select");
+		Object.assign(view as unknown as Record<string, unknown>, {
+			modelInputEl: textSelect,
+			imageModelInputEl: imageSelect,
+			textModelCatalog: ["m-text", "m-image"],
+			imageModelCatalog: ["m-text", "m-image"],
+		});
+		(view as unknown as { refreshTextModelOptions(): void }).refreshTextModelOptions();
+		(view as unknown as { refreshImageModelOptions(): void }).refreshImageModelOptions();
+		expect(groupLabelsOf(textSelect)).toEqual(["Writing", "All models"]);
+		expect(groupLabelsOf(imageSelect)).toEqual(["Pictures", "All models"]);
 	});
 
 	it("falls back to the classic model for legacy sessions without a text override", () => {

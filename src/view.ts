@@ -604,7 +604,7 @@ export class ChatView extends ItemView {
 		oaPaintModelSelect(
 			this.modelInputEl,
 			pseudo,
-			oaBuildModelOptionGroups(this.textModelCatalog, settings.modelCategories),
+			oaBuildModelOptionGroups(this.textModelCatalog, settings.modelCategories, "text"),
 		);
 		this.modelInputEl.value = selected;
 	}
@@ -634,7 +634,7 @@ export class ChatView extends ItemView {
 		oaPaintModelSelect(
 			this.imageModelInputEl,
 			pseudo,
-			oaBuildModelOptionGroups(this.imageModelCatalog, settings.modelCategories),
+			oaBuildModelOptionGroups(this.imageModelCatalog, settings.modelCategories, "image"),
 		);
 		this.imageModelInputEl.value = selected;
 	}

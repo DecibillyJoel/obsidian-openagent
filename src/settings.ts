@@ -1,7 +1,7 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type OpenAgentPlugin from "./main";
 import { DEFAULT_CONSENT, type ConsentSettings } from "./consent/manager";
-import { oaBuildModelOptionGroups, oaCatalogWithCurrent, type ModelCategory } from "./models/categories";
+import { oaBuildModelOptionGroups, oaCatalogWithCurrent, type ModelCategory, type ModelCategoryKind } from "./models/categories";
 import { oaPaintModelSelect, type ModelSelectPseudoOption } from "./models/selectOptions";
 import { renderModelCategoriesSection } from "./models/categoriesSection";
 import { loadPacks } from "./packs/loader";
@@ -270,7 +270,7 @@ export class OpenAgentSettingsTab extends PluginSettingTab {
 		onSave: (v: string) => Promise<void>,
 		getBaseUrl: () => string,
 		getApiKey: () => string,
-		kind = "text",
+		kind: ModelCategoryKind = "text",
 	): void {
 		container.empty();
 		const saved = getValue();
@@ -305,7 +305,9 @@ export class OpenAgentSettingsTab extends PluginSettingTab {
 				? [{ label: current, value: current }]
 				: [{ label: "— click Fetch to select —", value: "" }];
 			const groups =
-				allModels.length > 0 ? oaBuildModelOptionGroups(allModels, this.plugin.settings.modelCategories) : [];
+				allModels.length > 0
+					? oaBuildModelOptionGroups(allModels, this.plugin.settings.modelCategories, kind)
+					: [];
 			oaPaintModelSelect(selectEl, pseudo, groups);
 			selectEl.value = allModels.includes(current) ? current : (allModels[0] ?? current);
 		};
