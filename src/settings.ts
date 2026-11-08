@@ -3,6 +3,7 @@ import type OpenAgentPlugin from "./main";
 import { DEFAULT_CONSENT, type ConsentSettings } from "./consent/manager";
 import { oaBuildModelOptionGroups, oaCatalogWithCurrent, type ModelCategory } from "./models/categories";
 import { oaPaintModelSelect, type ModelSelectPseudoOption } from "./models/selectOptions";
+import { renderModelCategoriesSection } from "./models/categoriesSection";
 import { loadPacks } from "./packs/loader";
 import type { AgentPack } from "./packs/types";
 import { oaFetchModelIds, oaModelEligibleOrUnknown } from "./provider";
@@ -224,6 +225,22 @@ export class OpenAgentSettingsTab extends PluginSettingTab {
 				);
 			}
 		}
+
+		new Setting(containerEl).setName("Model categories").setHeading();
+		renderModelCategoriesSection(containerEl, {
+			getCategories: () => this.plugin.settings.modelCategories,
+			setCategories: async (next) => {
+				this.plugin.settings.modelCategories = next;
+				await this.plugin.saveSettings();
+			},
+			getEndpoint: () => ({
+				baseUrl: this.plugin.settings.baseUrl,
+				apiKey: this.plugin.settings.apiKey,
+			}),
+			onChanged: () => {
+				for (const paint of this.modelSelectPainters) paint();
+			},
+		});
 	}
 
 	private savePackProviderField(

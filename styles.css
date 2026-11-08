@@ -996,3 +996,83 @@
 	justify-content: flex-end;
 	margin-top: 0.25rem;
 }
+
+/* Model categories: the settings editor and the model choosers */
+.open-agent-category {
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	padding: 0.25rem 0.5rem;
+	margin-bottom: 0.5rem;
+}
+
+.open-agent-category > summary {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	cursor: pointer;
+}
+
+.open-agent-category-name {
+	font-weight: var(--font-medium);
+}
+
+.open-agent-category-count {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
+.open-agent-category-body {
+	display: flex;
+	flex-direction: column;
+	gap: 0.35rem;
+	padding-top: 0.5rem;
+}
+
+.open-agent-category-title,
+.open-agent-category-filter {
+	width: 100%;
+}
+
+.open-agent-category-fetch,
+.open-agent-category-add,
+.open-agent-category-remove {
+	align-self: flex-start;
+}
+
+.open-agent-category-list {
+	display: flex;
+	flex-direction: column;
+	max-height: 16rem;
+	overflow-y: auto;
+}
+
+.open-agent-category-row {
+	display: flex;
+	align-items: center;
+	gap: 0.4rem;
+	padding: 0.1rem 0;
+}
+
+.open-agent-category-check {
+	margin: 0;
+	flex-shrink: 0;
+}
+
+.open-agent-category-row-label {
+	font-size: var(--font-ui-small);
+	overflow-wrap: anywhere;
+}
+
+.open-agent-category-row-hidden {
+	display: none;
+}
+
+/*
+ * A stored id the last fetch did not return. The chooser also sets the
+ * option's own disabled flag, because some platforms ignore
+ * text-decoration on a disabled <option>.
+ */
+.open-agent-model-option-unavailable {
+	color: var(--text-faint);
+	text-decoration: line-through;
+}
