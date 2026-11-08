@@ -1,7 +1,8 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type OpenAgentPlugin from "./main";
 import { DEFAULT_CONSENT, type ConsentSettings } from "./consent/manager";
-import type { ModelCategory } from "./models/categories";
+import { oaBuildModelOptionGroups, oaCatalogWithCurrent, type ModelCategory } from "./models/categories";
+import { oaPaintModelSelect, type ModelSelectPseudoOption } from "./models/selectOptions";
 import { loadPacks } from "./packs/loader";
 import type { AgentPack } from "./packs/types";
 import { oaFetchModelIds, oaModelEligibleOrUnknown } from "./provider";
@@ -40,6 +41,7 @@ export function isConfigured(s: PluginSettings): boolean {
 
 export class OpenAgentSettingsTab extends PluginSettingTab {
 	private readonly plugin: OpenAgentPlugin;
+	private modelSelectPainters: Array<() => void> = [];
 
 	constructor(app: App, plugin: OpenAgentPlugin) {
 		super(app, plugin);
@@ -47,6 +49,7 @@ export class OpenAgentSettingsTab extends PluginSettingTab {
 	}
 
 	display(): void {
+		this.modelSelectPainters = [];
 		const { containerEl } = this;
 		containerEl.empty();
 
@@ -271,19 +274,33 @@ export class OpenAgentSettingsTab extends PluginSettingTab {
 		}
 
 		let selectEl: HTMLSelectElement | null = null;
+		let catalog: string[] = [];
+
+		const paint = (): void => {
+			if (!selectEl) return;
+			const current = getValue();
+			const allModels = oaCatalogWithCurrent(
+				catalog,
+				current,
+				kind === "image" ? () => true : (id) => oaModelEligibleOrUnknown(id, kind),
+			);
+			const pseudo: ModelSelectPseudoOption[] = current
+				? [{ label: current, value: current }]
+				: [{ label: "— click Fetch to select —", value: "" }];
+			const groups =
+				allModels.length > 0 ? oaBuildModelOptionGroups(allModels, this.plugin.settings.modelCategories) : [];
+			oaPaintModelSelect(selectEl, pseudo, groups);
+			selectEl.value = allModels.includes(current) ? current : (allModels[0] ?? current);
+		};
+		this.modelSelectPainters.push(paint);
 
 		new Setting(container)
 			.setName(name)
 			.setDesc(desc)
 			.addDropdown((drop) => {
 				selectEl = drop.selectEl;
-				if (saved) {
-					drop.addOption(saved, saved);
-					drop.setValue(saved);
-				} else {
-					drop.addOption("", "— click Fetch to select —");
-					drop.setValue("");
-				}
+				paint();
+				drop.setValue(saved);
 				drop.onChange(async (v) => {
 					if (v) await onSave(v);
 				});
@@ -314,20 +331,9 @@ export class OpenAgentSettingsTab extends PluginSettingTab {
 					}
 
 					btn.setButtonText("Fetch models").setDisabled(false);
-					if (selectEl) {
-						const current = getValue();
-						while (selectEl.options.length > 0) selectEl.remove(0);
-						const allModels =
-							kind !== "image" && current && !models.includes(current) && oaModelEligibleOrUnknown(current, kind)
-								? [current, ...models]
-								: models;
-						for (const m of allModels) {
-							selectEl.add(new Option(m, m));
-						}
-						const toSelect = current && allModels.includes(current) ? current : (allModels[0] ?? "");
-						selectEl.value = toSelect;
-						await onSave(toSelect);
-					}
+					catalog = models;
+					paint();
+					await onSave(selectEl?.value ?? "");
 				});
 			});
 	}
