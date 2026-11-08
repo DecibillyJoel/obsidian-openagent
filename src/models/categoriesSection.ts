@@ -22,6 +22,9 @@ function oaCountLabel(count: number): string {
  * the catalog lacks stays listed and checked, marked unavailable, so the user
  * can still clear it. Every mutation builds a new array for `setCategories`,
  * so the caller's own list is never edited in place.
+ *
+ * Ownership: the section creates one child div of `container` and empties only
+ * that child on every render. A sibling that is already in `container` stays.
  */
 export function renderModelCategoriesSection(
 	container: HTMLElement,
@@ -30,13 +33,14 @@ export function renderModelCategoriesSection(
 	let catalog: string[] | null = null;
 	const noticeIds = new Set<string>();
 	const openIds = new Set<string>();
+	const root = container.createDiv({ cls: "open-agent-categories" });
 
 	const render = (): void => {
-		container.empty();
+		root.empty();
 		const titles = new Map<string, HTMLInputElement>();
 
 		for (const category of options.getCategories()) {
-			const details = container.createEl("details", { cls: "open-agent-category" });
+			const details = root.createEl("details", { cls: "open-agent-category" });
 			details.open = openIds.has(category.id);
 			details.addEventListener("toggle", () => {
 				if (details.open) openIds.add(category.id);
@@ -166,7 +170,7 @@ export function renderModelCategoriesSection(
 			});
 		}
 
-		const addButton = container.createEl("button", { cls: "open-agent-category-add", text: "Add category" });
+		const addButton = root.createEl("button", { cls: "open-agent-category-add", text: "Add category" });
 		addButton.addEventListener("click", () => {
 			void (async () => {
 				const created: ModelCategory = { id: oaNewModelCategoryId(), name: "", models: [] };

@@ -12,8 +12,7 @@ function findByClass(root: MockElement, className: string): MockElement[] {
 	return out;
 }
 
-function setup(categories: ModelCategory[]) {
-	const container = new MockElement("div");
+function setup(categories: ModelCategory[], container = new MockElement("div")) {
 	const saves: ModelCategory[][] = [];
 	const changed = vi.fn();
 	renderModelCategoriesSection(container as unknown as HTMLElement, {
@@ -168,5 +167,14 @@ describe("model categories section", () => {
 		await flush();
 		expect(saves[1][0].name).toBe("");
 		expect(findByClass(container, "open-agent-category-name")[0].textContent).toBe("Untitled category");
+	});
+
+	it("leaves a sibling already in the container alone", () => {
+		const container = new MockElement("div");
+		const sibling = container.createDiv({ cls: "open-agent-existing-setting" });
+		sibling.setText("Grounded Research");
+		setup([{ id: "c1", name: "Favourites", models: [] }], container);
+		expect(container.children).toContain(sibling);
+		expect(sibling.textContent).toBe("Grounded Research");
 	});
 });
