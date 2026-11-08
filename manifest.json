@@ -2,9 +2,9 @@
   "id": "open-agent",
   "name": "OpenAgent",
   "version": "0.1.2",
-  "minAppVersion": "1.5.0",
+  "minAppVersion": "1.7.2",
   "description": "Run a vault-aware AI agent with tools and your own API keys.",
-  "author": "nikitaclicks",
-  "authorUrl": "https://github.com/nikitaclicks",
+  "author": "nikitaclicks (forked by DecibillyJoel)",
+  "authorUrl": "https://github.com/DecibillyJoel/obsidian-openagent",
   "isDesktopOnly": false
 }

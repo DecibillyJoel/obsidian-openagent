@@ -32,6 +32,13 @@
 	padding-right: 0.25rem;
 }
 
+/* Keep chat output selectable even when Obsidian or a theme disables selection in UI panes. */
+.open-agent-view .open-agent-transcript,
+.open-agent-view .open-agent-transcript * {
+	-webkit-user-select: text !important;
+	user-select: text !important;
+}
+
 .open-agent-turn {
 	display: flex;
 	flex-direction: column;
@@ -144,6 +151,114 @@
 }
 .open-agent-buttons { display: flex; gap: 0.5rem; justify-content: flex-end; }
 
+.open-agent-image-input {
+	display: none;
+}
+.open-agent-image-previews,
+.open-agent-turn-images {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+	align-items: center;
+}
+.open-agent-image-previews:empty {
+	display: none;
+}
+.open-agent-image-chip {
+	display: flex;
+	align-items: center;
+	gap: 0.4rem;
+	max-width: 100%;
+	padding: 0.25rem 0.4rem;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-secondary);
+}
+.open-agent-image-thumb {
+	width: 42px;
+	height: 42px;
+	object-fit: cover;
+	border-radius: 4px;
+}
+.open-agent-image-name {
+	max-width: 180px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: var(--font-ui-small);
+}
+.open-agent-image-remove {
+	min-width: 28px;
+	min-height: 28px;
+	padding: 0;
+	font-size: 18px;
+	line-height: 1;
+}
+.open-agent-image-hint {
+	width: 100%;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+.open-agent-turn-image {
+	max-width: min(240px, 100%);
+	max-height: 240px;
+	object-fit: contain;
+	border-radius: 6px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-primary);
+}
+
+.open-agent-generated-images {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+	gap: 0.75rem;
+	margin-top: 0.4rem;
+}
+.open-agent-generated-image-card {
+	display: flex;
+	flex-direction: column;
+	gap: 0.35rem;
+	min-width: 0;
+	padding: 0.5rem;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	background: var(--background-primary);
+}
+.open-agent-generated-image {
+	width: 100%;
+	max-height: 420px;
+	object-fit: contain;
+	border-radius: 6px;
+	cursor: pointer;
+}
+.open-agent-generated-image-open {
+	width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.open-agent-generated-image-model,
+.open-agent-generated-image-missing {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	word-break: break-word;
+}
+
+@media (max-width: 767px) {
+	.open-agent-buttons {
+		flex-wrap: wrap;
+	}
+	.open-agent-image-name {
+		max-width: 120px;
+	}
+	.open-agent-turn-image {
+		max-width: 100%;
+	}
+	.open-agent-generated-images {
+		grid-template-columns: 1fr;
+	}
+}
+
 /* Tool cards */
 .open-agent-tool-card {
 	border: 1px solid var(--background-modifier-border);
@@ -157,6 +272,26 @@
 	gap: 0.5rem;
 	align-items: baseline;
 	cursor: pointer;
+}
+.open-agent-tool-card[aria-busy="true"] .open-agent-tool-status {
+	color: var(--interactive-accent);
+	font-weight: 600;
+}
+.open-agent-tool-card[aria-busy="true"] .open-agent-tool-status::before {
+	content: "";
+	display: inline-block;
+	width: 0.65em;
+	height: 0.65em;
+	margin-right: 0.35em;
+	border: 2px solid currentColor;
+	border-right-color: transparent;
+	border-radius: 50%;
+	animation: open-agent-tool-spin 0.8s linear infinite;
+}
+@keyframes open-agent-tool-spin {
+	to {
+		transform: rotate(360deg);
+	}
 }
 .open-agent-tool-name { font-weight: 600; }
 .open-agent-tool-args { color: var(--text-muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -177,7 +312,7 @@
 	white-space: pre-wrap;
 	word-break: break-word;
 }
-.open-agent-tool-more, .open-agent-tool-open, .open-agent-diff-more {
+.open-agent-tool-more, .open-agent-tool-open, .open-agent-tool-retry, .open-agent-diff-more {
 	font-size: var(--font-ui-smaller);
 	margin-right: 0.5rem;
 }
@@ -255,6 +390,27 @@
 	gap: 0.3rem;
 	padding-bottom: 0.4rem;
 	border-bottom: 1px solid var(--background-modifier-border);
+}
+.open-agent-header.is-collapsed {
+	padding-bottom: 0.2rem;
+}
+.open-agent-header-toggle {
+	align-self: flex-start;
+	border: none;
+	background: transparent;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	padding: 0.15rem 0.3rem;
+	cursor: pointer;
+}
+.open-agent-header-toggle:hover {
+	color: var(--text-normal);
+	background: var(--background-modifier-hover);
+}
+.open-agent-header-body {
+	display: flex;
+	flex-direction: column;
+	gap: 0.3rem;
 }
 
 .open-agent-session-bar {

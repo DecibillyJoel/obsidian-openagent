@@ -306,6 +306,66 @@ describe("SessionStore", () => {
 		expect(store.getActive().turns).toEqual([{ role: "assistant", content: "healthy again" }]);
 		expect(store.getActive().recovery).toBeNull();
 	});
+
+	it("remembers the per-session text override and keeps the classic model when the default is selected", async () => {
+		const persistIndex = vi.fn(async () => undefined);
+		const readTurns = vi.fn(async () => ({ turns: [] }));
+		const writeTurns = vi.fn(async () => undefined);
+		const deleteTurns = vi.fn(async () => undefined);
+		const store = new SessionStore({ persistIndex, readTurns, writeTurns, deleteTurns });
+
+		await store.init(
+			[
+				{
+					id: "session-a",
+					title: "A",
+					model: "classic",
+					selectedPackId: null,
+					lastClassicModel: "classic",
+					createdAt: 1,
+					updatedAt: 2,
+				},
+			],
+			"session-a",
+		);
+
+		await store.updateModel("session-a", "override-model");
+		expect(store.getActive().textModel).toBe("override-model");
+		expect(store.getActive().model).toBe("override-model");
+		expect(store.getActive().lastClassicModel).toBe("override-model");
+
+		await store.updateModel("session-a", "");
+		expect(store.getActive().textModel).toBe("");
+		expect(store.getActive().model).toBe("override-model");
+		expect(store.getActive().lastClassicModel).toBe("override-model");
+	});
+
+	it("maps a legacy session without textModel to null and seeds new chats with an empty override", async () => {
+		const persistIndex = vi.fn(async () => undefined);
+		const readTurns = vi.fn(async () => ({ turns: [] }));
+		const writeTurns = vi.fn(async () => undefined);
+		const deleteTurns = vi.fn(async () => undefined);
+		const store = new SessionStore({ persistIndex, readTurns, writeTurns, deleteTurns });
+
+		await store.init(
+			[
+				{
+					id: "session-a",
+					title: "A",
+					model: "classic",
+					selectedPackId: null,
+					lastClassicModel: "classic",
+					createdAt: 1,
+					updatedAt: 2,
+				},
+			],
+			"session-a",
+		);
+		expect(store.getActive().textModel).toBeNull();
+
+		const created = await store.create();
+		expect(created.textModel).toBe("");
+	});
 });
 
 describe("loadStoredTurnsFile", () => {

@@ -14,7 +14,12 @@ export function validateArgs(args: unknown, schema: JsonSchema): ValidationResul
 
 	for (const [key, value] of Object.entries(obj)) {
 		const propSchema = schema.properties[key];
-		if (!propSchema) continue;
+		if (!propSchema) {
+			if (schema.additionalProperties === false) {
+				return { ok: false, error: `unexpected field '${key}'` };
+			}
+			continue;
+		}
 		const r = validateProp(value, propSchema, key);
 		if (!r.ok) return r;
 	}
@@ -49,7 +54,12 @@ function validateProp(value: unknown, schema: JsonSchemaProperty, path: string):
 			}
 			for (const [k, v] of Object.entries(obj)) {
 				const sub = schema.properties[k];
-				if (!sub) continue;
+				if (!sub) {
+					if (schema.additionalProperties === false) {
+						return { ok: false, error: `unexpected field '${path}.${k}'` };
+					}
+					continue;
+				}
 				const r = validateProp(v, sub, `${path}.${k}`);
 				if (!r.ok) return r;
 			}

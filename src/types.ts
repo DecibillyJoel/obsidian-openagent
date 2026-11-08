@@ -6,13 +6,55 @@ export interface ToolCallSpec {
 	function: { name: string; arguments: string };
 }
 
+export interface ChatContentTextPart {
+	type: "text";
+	text: string;
+}
+
+export interface ChatContentImagePart {
+	type: "image_url";
+	image_url: { url: string };
+}
+
+export type ChatContentPart = ChatContentTextPart | ChatContentImagePart;
+
+// The resolved source images for an `image_generate` call plus one display name per
+// reference, in the same order.
+export interface GenerationReferenceResult {
+	references: ChatContentImagePart[];
+	names: string[];
+}
+
 export interface ChatMessage {
 	role: Role;
-	content: string;
+	content: string | ChatContentPart[];
 	tool_calls?: ToolCallSpec[];
 	tool_call_id?: string;
 	name?: string;
 }
+
+// A generated image persisted at the vault root and shown in the transcript.
+export interface GeneratedImage {
+	path: string;
+	prompt: string;
+	model: string;
+	source?: "vault";
+	referenceImageNames?: string[];
+}
+
+// A reference to an image already present in the conversation. Attached images use
+// `url`; generated images use `path`.
+export interface ConversationImageReference {
+	url?: string;
+	path?: string;
+	name?: string;
+}
+
+export type GetConversationImages = () =>
+	| ConversationImageReference[]
+	| Promise<ConversationImageReference[]>;
+
+export type GetImageModel = () => string | Promise<string>;
 
 export interface AssembledToolCall {
 	id: string;
@@ -23,6 +65,7 @@ export interface AssembledToolCall {
 
 export type StreamEvent =
 	| { kind: "text"; text: string; degraded?: boolean }
+	| { kind: "images"; urls: string[] }
 	| { kind: "thinking_text"; text: string }
 	| { kind: "tool_call_assembled"; calls: AssembledToolCall[]; degraded?: boolean }
 	| { kind: "done"; finishReason: "stop" | "tool_calls" | "length" | "content_filter" | "unknown" };
@@ -90,6 +133,8 @@ export type ToolResult =
 
 export interface ToolContext {
 	signal?: AbortSignal;
+	getConversationImages?: GetConversationImages;
+	getImageModel?: GetImageModel;
 }
 
 export interface ToolDef<TArgs = unknown> {
@@ -98,6 +143,9 @@ export interface ToolDef<TArgs = unknown> {
 	schema: JsonSchema;
 	category: ToolCategory;
 	mutates: boolean;
+	requiresApproval?: boolean; // default true — set false to skip the consent prompt
+	stopOnFailure?: boolean; // default false — when true, a failed call ends the run
+	timeoutMs?: number;
 	run(args: TArgs, ctx: ToolContext): Promise<ToolResult>;
 }
 
@@ -112,6 +160,7 @@ export interface ConsentDecision {
 // Loop events
 export type LoopEvent =
 	| { kind: "text"; text: string; degraded?: boolean }
+	| { kind: "images"; urls: string[] }
 	| { kind: "thinking_text"; text: string }
 	| { kind: "tool_call_started"; id: string; name: string; args: unknown; mutates: boolean }
 	| { kind: "consent_requested"; id: string; name: string }

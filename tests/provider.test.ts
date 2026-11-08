@@ -8,7 +8,11 @@ vi.mock("obsidian", () => ({
 	requestUrl: requestUrlMock,
 }));
 
-import { OpenAICompatibleProvider } from "../src/provider";
+import {
+	oaFetchModelIds,
+	oaModelEligibleOrUnknown,
+	OpenAICompatibleProvider,
+} from "../src/provider";
 
 describe("OpenAICompatibleProvider", () => {
 	beforeEach(() => {
@@ -184,6 +188,79 @@ describe("OpenAICompatibleProvider", () => {
 			method: "GET",
 			throw: false,
 		}));
+	});
+
+	it("discovers image-capable models from the /images/models endpoint", async () => {
+		requestUrlMock.mockResolvedValue({
+			status: 200,
+			text: JSON.stringify({
+				data: [
+					{ id: "text-only", architecture: { output_modalities: ["text"] } },
+					{ id: "img-ok", architecture: { output_modalities: ["text", "image"] } },
+					{ id: "img-batch:batch", architecture: { output_modalities: ["image"] } },
+					{ id: "no-arch" },
+				],
+			}),
+		});
+
+		await expect(oaFetchModelIds("https://api.example.com/", "secret", "image")).resolves.toEqual([
+			"img-ok",
+		]);
+		expect(requestUrlMock).toHaveBeenCalledWith(expect.objectContaining({
+			url: "https://api.example.com/images/models",
+			method: "GET",
+			throw: false,
+		}));
+		expect(oaModelEligibleOrUnknown("img-ok", "image")).toBe(true);
+		expect(oaModelEligibleOrUnknown("img-ok", "audio")).toBe(false);
+		expect(oaModelEligibleOrUnknown("no-arch", "audio")).toBe(true);
+		expect(oaModelEligibleOrUnknown("img-batch:batch", "image")).toBe(false);
+	});
+
+	it("treats every listed model as eligible when no modalities are reported", async () => {
+		requestUrlMock.mockResolvedValue({
+			status: 200,
+			text: JSON.stringify({ data: [{ id: "open-model" }] }),
+		});
+
+		await expect(oaFetchModelIds("https://api.example.com", "secret", "text")).resolves.toEqual([
+			"open-model",
+		]);
+		expect(oaModelEligibleOrUnknown("open-model", "text")).toBe(true);
+	});
+
+	it("yields an images event when the completion returns inline images", async () => {
+		requestUrlMock.mockResolvedValue({
+			status: 200,
+			text: JSON.stringify({
+				choices: [
+					{
+						message: {
+							content: "hello",
+							images: [{ url: "data:image/png;base64,iVBORw0KGgo=" }],
+						},
+						finish_reason: "stop",
+					},
+				],
+			}),
+		});
+
+		const provider = new OpenAICompatibleProvider({
+			baseUrl: "https://api.example.com",
+			apiKey: "secret",
+			model: "test-model",
+		});
+
+		const events = [];
+		for await (const event of provider.stream([{ role: "user", content: "hi" }])) {
+			events.push(event);
+		}
+
+		expect(events).toEqual([
+			{ kind: "text", text: "hello" },
+			{ kind: "images", urls: ["data:image/png;base64,iVBORw0KGgo="] },
+			{ kind: "done", finishReason: "stop" },
+		]);
 	});
 
 	it("falls back when the endpoint rejects response_format", async () => {

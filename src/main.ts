@@ -1,4 +1,4 @@
-import { Notice, Platform, Plugin, TFile, Workspace, WorkspaceLeaf } from "obsidian";
+import { Notice, Platform, Plugin, TFile, TFolder, Workspace, WorkspaceLeaf } from "obsidian";
 import { ensureDefaultPacks, loadPacks } from "./packs/loader";
 import { runPack, type PackRuntimeEvent, type PackRunResult } from "./packs/runtime";
 import type { AgentPack } from "./packs/types";
@@ -8,7 +8,11 @@ import { OpenAgentSettingsTab, DEFAULT_SETTINGS, type PluginSettings } from "./s
 import { SessionStore, loadStoredTurnsFile, type SessionMeta, type StoredTurn } from "./sessions";
 import { ToolRegistry } from "./tools/registry";
 import { vaultTools } from "./tools/vault";
+import { openAgentImageGenerateTool } from "./tools/image-generate";
+import { openAgentImageRegionTool } from "./tools/image-region";
+import { ensureParentFolder } from "./tools/vault/ensure-folder";
 import { CHAT_VIEW_TYPE, ChatView } from "./view";
+import { oaAnnotateTools } from "./images/geometry";
 
 const SETTINGS_CHANGED_EVENT = "open-agent:settings-changed";
 
@@ -63,7 +67,14 @@ export default class OpenAgentPlugin extends Plugin {
 
 		this.toolRegistry = new ToolRegistry();
 		this.undo = new UndoBuffer(50);
-		this.toolRegistry.registerAll(vaultTools(this.app, { undo: this.undo }));
+		this.toolRegistry.registerAll(
+			oaAnnotateTools(this.app, [
+				openAgentImageGenerateTool(this.app, () => this.settings),
+				openAgentImageRegionTool(this.app, "snip"),
+				openAgentImageRegionTool(this.app, "blot"),
+				...vaultTools(this.app, { undo: this.undo }),
+			]),
+		);
 
 		this.registerView(CHAT_VIEW_TYPE, (leaf: WorkspaceLeaf) => {
 			const consent = new ConsentManager(() => this.settings.consent);
@@ -162,12 +173,58 @@ export default class OpenAgentPlugin extends Plugin {
 			return;
 		}
 		try {
+			if ("kind" in op) {
+				if (op.kind === "move") {
+					const item = this.app.vault.getAbstractFileByPath(op.to);
+					if (!(item instanceof TFile) && !(item instanceof TFolder)) {
+						throw new Error(`Moved item not found: ${op.to}`);
+					}
+					if (this.app.vault.getAbstractFileByPath(op.from)) {
+						throw new Error(`Original path already exists: ${op.from}`);
+					}
+					await ensureParentFolder(this.app, op.from);
+					await this.app.fileManager.renameFile(item, op.from);
+					new Notice(`Reverted ${op.to} to ${op.from}`);
+					return;
+				}
+				if (op.kind === "trash-move") {
+					const item = this.app.vault.getAbstractFileByPath(op.to);
+					if (!(item instanceof TFile) && !(item instanceof TFolder)) {
+						throw new Error(`Trashed item not found: ${op.to}`);
+					}
+					if (this.app.vault.getAbstractFileByPath(op.from)) {
+						throw new Error(`Original path already exists: ${op.from}`);
+					}
+					await ensureParentFolder(this.app, op.from);
+					await this.app.vault.rename(item, op.from);
+					new Notice(`Restored ${op.from}`);
+					return;
+				}
+				if (op.kind === "create-folder") {
+					const createdPaths = [...op.createdPaths].reverse();
+					let removed = 0;
+					for (const created of createdPaths) {
+						const folder = this.app.vault.getAbstractFileByPath(created);
+						if (folder instanceof TFolder && folder.children.length === 0) {
+							await this.app.vault.trash(folder, false);
+							removed++;
+						}
+					}
+					new Notice(
+						removed === createdPaths.length
+							? `Removed ${op.path}`
+							: `Removed ${removed} empty created folder${removed === 1 ? "" : "s"}; non-empty folders were kept`,
+					);
+					return;
+				}
+			}
 			const file = this.app.vault.getAbstractFileByPath(op.path);
 			if (op.before === null) {
 				if (file instanceof TFile) await this.app.vault.trash(file, true);
 			} else if (file instanceof TFile) {
 				await this.app.vault.modify(file, op.before);
 			} else {
+				await ensureParentFolder(this.app, op.path);
 				await this.app.vault.create(op.path, op.before);
 			}
 			new Notice(`Reverted ${op.path}`);
@@ -205,5 +262,5 @@ export default class OpenAgentPlugin extends Plugin {
 }
 
 function focusLeaf(workspace: Workspace, leaf: WorkspaceLeaf): void {
-	workspace.setActiveLeaf(leaf, { focus: true });
+	void workspace.revealLeaf(leaf);
 }

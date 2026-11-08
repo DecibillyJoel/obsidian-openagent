@@ -17,6 +17,7 @@ function createDeps(activeSession: {
 	model: string;
 	selectedPackId: string | null;
 	lastClassicModel: string;
+	textModel?: string | null;
 	turns?: unknown[];
 	recovery?: {
 		reason: "turns-corrupt";
@@ -63,6 +64,26 @@ function textTree(root: MockElement): string {
 	return [root.textContent, ...root.children.map((child) => textTree(child))]
 		.filter(Boolean)
 		.join(" ");
+}
+
+class MockSelectOption {
+	text: string;
+	value: string;
+	constructor(text: string, value: string) {
+		this.text = text;
+		this.value = value;
+	}
+}
+
+class MockSelect {
+	options: MockSelectOption[] = [];
+	value = "";
+	empty(): void {
+		this.options = [];
+	}
+	add(option: MockSelectOption): void {
+		this.options.push(option);
+	}
 }
 
 function renderPackTurn(view: ChatView, packTurn: StoredPackTurnData): MockElement {
@@ -972,5 +993,53 @@ describe("ChatView pack UI", () => {
 		const banners = findByClass(sessionRecoveryEl, "open-agent-pack-banner");
 		expect(banners).toHaveLength(1);
 		expect(banners[0]?.textContent).toContain("sessions/session-a.corrupt-123.json");
+	});
+
+	it("orders text model options as default, override, global, then catalog", () => {
+		const app = createMockApp();
+		const { deps } = createDeps({
+			id: "session-a",
+			model: "session-model",
+			textModel: "override-model",
+			selectedPackId: null,
+			lastClassicModel: "session-model",
+		});
+		deps.getSettings = () => ({ ...DEFAULT_SETTINGS, apiKey: "token", model: "gpt-4o-mini" });
+		const view = new ChatView({ app } as never, deps);
+		const select = new MockSelect();
+		select.options = [
+			new MockSelectOption("Default: gpt-4o-mini", ""),
+			new MockSelectOption("gpt-4o-mini", "gpt-4o-mini"),
+			new MockSelectOption("catalog-a", "catalog-a"),
+			new MockSelectOption("override-model", "override-model"),
+		];
+		Object.assign(view as unknown as Record<string, unknown>, {
+			modelInputEl: select,
+			textModelCatalog: ["gpt-4o-mini", "override-model", "catalog-a"],
+		});
+		vi.stubGlobal("Option", MockSelectOption);
+		try {
+			(view as unknown as { refreshTextModelOptions(): void }).refreshTextModelOptions();
+		} finally {
+			vi.unstubAllGlobals();
+		}
+		expect(select.options.map((o) => o.value)).toEqual(["", "override-model", "gpt-4o-mini", "catalog-a"]);
+	});
+
+	it("falls back to the classic model for legacy sessions without a text override", () => {
+		const app = createMockApp();
+		const { deps } = createDeps({
+			id: "session-a",
+			model: "legacy-model",
+			selectedPackId: null,
+			lastClassicModel: "legacy-model",
+		});
+		deps.getSettings = () => ({ ...DEFAULT_SETTINGS, apiKey: "token", model: "gpt-4o-mini" });
+		const view = new ChatView({ app } as never, deps);
+		const override = (view as unknown as { getSessionTextOverride(): string }).getSessionTextOverride.bind(view);
+		expect(override()).toBe("legacy-model");
+
+		deps.getSettings = () => ({ ...DEFAULT_SETTINGS, apiKey: "token", model: "legacy-model" });
+		expect(override()).toBe("");
 	});
 });

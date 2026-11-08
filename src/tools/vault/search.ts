@@ -1,5 +1,6 @@
-import { type App, TFile } from "obsidian";
-import { defineTool, ok } from "../define";
+import { type App, TFile, TFolder } from "obsidian";
+import { defineTool, fail, ok } from "../define";
+import { PathError, safeVaultPath } from "./path-safe";
 
 interface Args {
 	query: string;
@@ -18,20 +19,36 @@ export function searchTool(app: App) {
 	return defineTool<Args>({
 		name: "vault_search",
 		description:
-			"Search the vault. Resolves exact filenames or [[wikilinks]] via the metadata cache, otherwise scopes by tag or folder, otherwise does a bounded full-text scan.",
+			"Search MARKDOWN NOTES (`.md`) by full text. A `[[wikilink]]` query may resolve directly, including to an image; exact image matches include exact dimensions, exact reduced aspectRatio, nearestSupportedAspectRatio, and resolution tier. Otherwise the tool scans Markdown note contents. With no folder scope, the scan includes Markdown notes in the VAULT ROOT and all nested folders. An optional folder scope intentionally limits the scan to that folder and its descendants and therefore excludes root-level notes outside it. This tool does not search folder names or non-Markdown file contents.",
 		category: "vault_read",
 		mutates: false,
 		schema: {
 			type: "object",
 			properties: {
-				query: { type: "string", description: "Search query, exact filename, or [[wikilink]]" },
+				query: {
+					type: "string",
+					description:
+						"Text to find in Markdown note contents, or a `[[wikilink]]` to resolve. For an exact filename query, include its extension when applicable.",
+				},
 				scope: {
 					type: "object",
-					description: "Optional scoping",
+					description: "Optional scoping. Omit `folder` when a broad search must include top-level vault notes.",
 					properties: {
-						folder: { type: "string", description: "Restrict to files under this folder (e.g. 'Notes/')" },
-						tag: { type: "string", description: "Restrict to notes with this tag (e.g. '#work' or 'work')" },
-						limit: { type: "integer", description: "Max matches", minimum: 1, maximum: 100 },
+						folder: {
+							type: "string",
+							description:
+								"Exact vault-relative FOLDER path. Searches Markdown notes in this folder and all descendants. Do not include a trailing filename.",
+						},
+						tag: {
+							type: "string",
+							description: "Restrict results to Markdown notes with this tag, with or without the leading `#`.",
+						},
+						limit: {
+							type: "integer",
+							description: "Maximum matches to return (1-100). Default: 20.",
+							minimum: 1,
+							maximum: 100,
+						},
 					},
 				},
 			},
@@ -41,11 +58,24 @@ export function searchTool(app: App) {
 			const limit = args.scope?.limit ?? 20;
 			const matches: Match[] = [];
 
+			let folderScope: string | undefined;
+			if (args.scope?.folder) {
+				try {
+					folderScope = safeVaultPath(args.scope.folder);
+				} catch (e) {
+					if (e instanceof PathError) return fail(`PathError: ${e.message}`);
+					throw e;
+				}
+				const scopeItem = app.vault.getAbstractFileByPath(folderScope);
+				if (!scopeItem) return fail(`NotFound: ${folderScope}`);
+				if (!(scopeItem instanceof TFolder)) return fail(`NotAFolder: ${folderScope}`);
+			}
+
 			// 1. Linkpath / exact-name resolution — only for explicit [[wikilink]] syntax.
 			const wikilinkMatch = /^\[\[([^\]]+)\]\]$/.exec(args.query.trim());
 			if (wikilinkMatch) {
 				const resolved = app.metadataCache.getFirstLinkpathDest(wikilinkMatch[1], "");
-				if (resolved instanceof TFile) {
+				if (resolved instanceof TFile && inFolder(resolved, folderScope)) {
 					return ok({
 						matches: [{ path: resolved.path, line: 0, excerpt: "(exact match)" }],
 						strategy: "linkpath",
@@ -60,13 +90,13 @@ export function searchTool(app: App) {
 				const candidates = app.vault
 					.getMarkdownFiles()
 					.filter((f) => fileHasTag(app, f, tag))
-					.filter((f) => inFolder(f, args.scope?.folder));
+					.filter((f) => inFolder(f, folderScope));
 				await scanFiles(app, candidates, args.query, matches, limit, BYTE_BUDGET);
 				return ok({ matches, strategy: "tag", truncated: matches.length >= limit });
 			}
 
 			// 3. Bounded full-text — byte budget is the only cap.
-			const all = app.vault.getMarkdownFiles().filter((f) => inFolder(f, args.scope?.folder));
+			const all = app.vault.getMarkdownFiles().filter((f) => inFolder(f, folderScope));
 			const scanned = await scanFiles(app, all, args.query, matches, limit, BYTE_BUDGET);
 			return ok({
 				matches,

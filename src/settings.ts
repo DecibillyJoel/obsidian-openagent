@@ -1,8 +1,9 @@
-import { App, PluginSettingTab, Setting, requestUrl } from "obsidian";
+import { App, PluginSettingTab, Setting } from "obsidian";
 import type OpenAgentPlugin from "./main";
 import { DEFAULT_CONSENT, type ConsentSettings } from "./consent/manager";
 import { loadPacks } from "./packs/loader";
 import type { AgentPack } from "./packs/types";
+import { oaFetchModelIds, oaModelEligibleOrUnknown } from "./provider";
 import type { OpenAICompatibleConfig } from "./provider-config";
 import type { ConsentMode } from "./types";
 
@@ -13,6 +14,7 @@ export interface PluginSettings {
 	baseUrl: string;
 	apiKey: string;
 	model: string;
+	imageModel: string;
 	systemPrompt: string;
 	consent: ConsentSettings;
 	packProviderOverrides: Record<string, Record<string, Partial<OpenAICompatibleConfig>>>;
@@ -23,6 +25,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 	baseUrl: "https://api.openai.com/v1",
 	apiKey: "",
 	model: "gpt-4o-mini",
+	imageModel: "",
 	systemPrompt: "",
 	consent: { ...DEFAULT_CONSENT },
 	packProviderOverrides: {},
@@ -30,31 +33,6 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 
 export function isConfigured(s: PluginSettings): boolean {
 	return s.baseUrl.trim().length > 0 && s.apiKey.trim().length > 0 && s.model.trim().length > 0;
-}
-
-async function fetchModelList(baseUrl: string, apiKey: string): Promise<string[]> {
-	if (!baseUrl.trim()) return [];
-	try {
-		const base = baseUrl.replace(/\/$/, "");
-		const res = await requestUrl({
-			url: `${base}/models`,
-			method: "GET",
-			headers: { Authorization: `Bearer ${apiKey}` },
-			throw: false,
-		});
-		if (res.status >= 400) return [];
-		const parsed = JSON.parse(res.text) as unknown;
-		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return [];
-		const data = (parsed as Record<string, unknown>).data;
-		if (!Array.isArray(data)) return [];
-		return (data as unknown[])
-			.filter((e): e is Record<string, unknown> => typeof e === "object" && e !== null && !Array.isArray(e))
-			.map((e) => e.id)
-			.filter((id): id is string => typeof id === "string" && id.length > 0)
-			.sort();
-	} catch {
-		return [];
-	}
 }
 
 export class OpenAgentSettingsTab extends PluginSettingTab {
@@ -79,7 +57,7 @@ export class OpenAgentSettingsTab extends PluginSettingTab {
 		const vaultNotice = containerEl.createEl("div", { cls: "open-agent-notice" });
 		vaultNotice.createEl("strong", { text: "Data sent to model endpoint: " });
 		vaultNotice.appendText(
-			"with tools enabled, the agent may transmit note bodies, paths, frontmatter, and tags to the model endpoint you've configured. Choose endpoints you trust.",
+			"with tools enabled, the agent may transmit note bodies, paths, frontmatter, tags, prompts, and selected image data to the model endpoint you've configured. Choose endpoints you trust.",
 		);
 
 		new Setting(containerEl)
@@ -133,6 +111,22 @@ export class OpenAgentSettingsTab extends PluginSettingTab {
 			},
 			() => this.plugin.settings.baseUrl,
 			() => this.plugin.settings.apiKey,
+			"text",
+		);
+
+		const imageModelContainer = containerEl.createDiv();
+		this.renderModelSetting(
+			imageModelContainer,
+			"Image generation model",
+			"Default image model for chats. Shows image-generation-capable models only and excludes batch variants.",
+			() => this.plugin.settings.imageModel ?? "",
+			async (v) => {
+				this.plugin.settings.imageModel = v;
+				await this.plugin.saveSettings();
+			},
+			() => this.plugin.settings.baseUrl,
+			() => this.plugin.settings.apiKey,
+			"image",
 		);
 
 		new Setting(containerEl)
@@ -253,6 +247,7 @@ export class OpenAgentSettingsTab extends PluginSettingTab {
 		onSave: (v: string) => Promise<void>,
 		getBaseUrl: () => string,
 		getApiKey: () => string,
+		kind = "text",
 	): void {
 		container.empty();
 		const saved = getValue();
@@ -293,7 +288,7 @@ export class OpenAgentSettingsTab extends PluginSettingTab {
 			.addButton((btn) => {
 				btn.setButtonText("Fetch models").onClick(async () => {
 					btn.setButtonText("Fetching…").setDisabled(true);
-					const models = await fetchModelList(getBaseUrl(), getApiKey());
+					const models = await oaFetchModelIds(getBaseUrl(), getApiKey(), kind);
 
 					if (models.length === 0) {
 						container.empty();
@@ -320,7 +315,9 @@ export class OpenAgentSettingsTab extends PluginSettingTab {
 						const current = getValue();
 						while (selectEl.options.length > 0) selectEl.remove(0);
 						const allModels =
-							current && !models.includes(current) ? [current, ...models] : models;
+							kind !== "image" && current && !models.includes(current) && oaModelEligibleOrUnknown(current, kind)
+								? [current, ...models]
+								: models;
 						for (const m of allModels) {
 							selectEl.add(new Option(m, m));
 						}

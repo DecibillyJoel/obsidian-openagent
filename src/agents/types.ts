@@ -1,6 +1,7 @@
 import type { ConsentManager } from "../consent/manager";
+import type { ResolveToolImages } from "../images/attachments";
 import type { ToolRegistry } from "../tools/registry";
-import type { ChatMessage, JsonSchema, LoopEvent, ModelProvider, ResponseFormatConfig } from "../types";
+import type { ChatMessage, GetImageModel, JsonSchema, LoopEvent, ModelProvider, ResponseFormatConfig } from "../types";
 import type { Agent } from "./agent";
 
 export interface AgentDefinition {
@@ -20,6 +21,8 @@ export interface AgentRunOptions {
 	systemPrompt?: string;
 	maxSteps?: number;
 	responseFormat?: ResponseFormatConfig;
+	resolveToolImages?: ResolveToolImages;
+	getImageModel?: GetImageModel;
 }
 
 export type AgentEvent = LoopEvent;

@@ -271,6 +271,9 @@ export const MarkdownRendererMock = {
 	}),
 };
 
+export const htmlToMarkdownMock = (html: string | { innerHTML?: string }): string =>
+	typeof html === "string" ? html : html.innerHTML ?? "";
+
 class MockPluginSettingTab {
 	app: unknown;
 	plugin: unknown;
@@ -366,6 +369,7 @@ vi.mock("obsidian", () => ({
 	ItemView: MockItemView,
 	Modal: MockModal,
 	MarkdownRenderer: MarkdownRendererMock,
+	htmlToMarkdown: htmlToMarkdownMock,
 	Notice: NoticeMock,
 	TFile: MockTFile,
 	WorkspaceLeaf: MockWorkspaceLeaf,

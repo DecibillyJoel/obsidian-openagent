@@ -3,6 +3,14 @@
   "version": "0.1.2",
   "description": "Vault-aware AI agent with tools and your own API keys.",
   "main": "main.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DecibillyJoel/obsidian-openagent.git"
+  },
+  "homepage": "https://github.com/DecibillyJoel/obsidian-openagent",
+  "bugs": {
+    "url": "https://github.com/DecibillyJoel/obsidian-openagent/issues"
+  },
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "node esbuild.config.mjs production",

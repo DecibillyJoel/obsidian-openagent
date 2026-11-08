@@ -1,5 +1,6 @@
 import type { ConsentManager } from "../consent/manager";
-import { ToolTimeoutError, runWithTimeout } from "../tools/timeout";
+import { oaMultimodalContent, type PendingImage } from "../images/attachments";
+import { ToolTimeoutError, runWithTimeout, DEFAULT_TOOL_TIMEOUT_MS } from "../tools/timeout";
 import type { ToolRegistry } from "../tools/registry";
 import { validateArgs } from "../tools/validate";
 import type {
@@ -7,9 +8,12 @@ import type {
 	AgentEvent,
 	AgentRunOptions,
 } from "./types";
+import type { ResolveToolImages } from "../images/attachments";
 import type {
 	AssembledToolCall,
 	ChatMessage,
+	GetConversationImages,
+	GetImageModel,
 	ModelProvider,
 	OpenAiToolSpec,
 	ResponseFormatConfig,
@@ -18,7 +22,7 @@ import type {
 	ToolResult,
 } from "../types";
 
-const DEFAULT_MAX_STEPS = 8;
+const DEFAULT_MAX_STEPS = 9999;
 
 interface BoundTools {
 	get(name: string): ToolDef | undefined;
@@ -36,7 +40,7 @@ export class Agent {
 		return this.definition;
 	}
 
-	async *run(opts: AgentRunOptions): AsyncIterable<AgentEvent> {
+	async *run(opts: AgentRunOptions & { getConversationImages?: GetConversationImages }): AsyncIterable<AgentEvent> {
 		yield* executeAgentLoop(this.definition, opts);
 	}
 }
@@ -50,6 +54,9 @@ export interface ExecuteAgentLoopOptions {
 	consent?: ConsentManager;
 	maxSteps?: number;
 	responseFormat?: ResponseFormatConfig;
+	resolveToolImages?: ResolveToolImages;
+	getConversationImages?: GetConversationImages;
+	getImageModel?: GetImageModel;
 }
 
 async function* executeAgentLoop(
@@ -83,6 +90,8 @@ async function* executeAgentLoop(
 				yield { kind: "text", text: ev.text, degraded: ev.degraded };
 			} else if (ev.kind === "thinking_text") {
 				yield { kind: "thinking_text", text: ev.text };
+			} else if (ev.kind === "images") {
+				yield { kind: "images", urls: ev.urls };
 			} else if (ev.kind === "tool_call_assembled") {
 				assembled.push(...ev.calls);
 			}
@@ -105,6 +114,8 @@ async function* executeAgentLoop(
 		messages.push({ role: "assistant", content: assistantText, tool_calls: toolCallSpecs });
 
 		let consentDenied = false;
+		const toolImages: PendingImage[] = [];
+		const seenToolImageUrls = new Set<string>();
 		for (const call of assembled) {
 			if (opts.signal?.aborted) return;
 			const toolDef = toolsApi?.get(call.name);
@@ -129,10 +140,14 @@ async function* executeAgentLoop(
 				const result: ToolResult = { ok: false, error: `ToolArgError: ${validated.error}` };
 				yield { kind: "tool_call_finished", id: call.id, result };
 				messages.push(toolMessage(call, result));
+				if (toolDef.stopOnFailure === true) {
+					yield { kind: "done" };
+					return;
+				}
 				continue;
 			}
 
-			if (toolDef.mutates) {
+			if (toolDef.mutates && toolDef.requiresApproval !== false) {
 				if (!opts.consent) {
 					const result: ToolResult = { ok: false, error: "ConsentDeniedError: no consent manager" };
 					yield { kind: "tool_call_finished", id: call.id, result };
@@ -157,8 +172,12 @@ async function* executeAgentLoop(
 			let result: ToolResult;
 			try {
 				result = await runWithTimeout(
-					toolDef.run(validated.value, { signal: opts.signal }),
-					30_000,
+					toolDef.run(validated.value, {
+						signal: opts.signal,
+						getConversationImages: opts.getConversationImages,
+						getImageModel: opts.getImageModel,
+					}),
+					toolDef.timeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS,
 					toolDef.name,
 					opts.signal,
 				);
@@ -174,6 +193,40 @@ async function* executeAgentLoop(
 
 			yield { kind: "tool_call_finished", id: call.id, result };
 			messages.push(toolMessage(call, result));
+
+			if (toolDef.stopOnFailure === true && !result.ok) {
+				yield { kind: "done" };
+				return;
+			}
+
+			if (
+				opts.resolveToolImages &&
+				call.name.startsWith("vault_") &&
+				result.ok
+			) {
+				try {
+					const resolved = await opts.resolveToolImages(call.name, result);
+					for (const image of resolved) {
+						if (!image || typeof image.url !== "string" || seenToolImageUrls.has(image.url)) continue;
+						seenToolImageUrls.add(image.url);
+						toolImages.push(image);
+					}
+				} catch {
+					// Image resolution is best-effort and must not fail the tool call.
+				}
+			}
+		}
+
+		if (toolImages.length > 0) {
+			const n = toolImages.length;
+			const list = toolImages.map((image) => `- ${image.name}`).join("\n");
+			messages.push({
+				role: "user",
+				content: oaMultimodalContent(
+					`Images referenced by the preceding vault tool result${n === 1 ? "" : "s"}. Use them as visual context:\n${list}`,
+					toolImages,
+				),
+			});
 		}
 
 		if (consentDenied) {

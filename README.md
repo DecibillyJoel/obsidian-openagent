@@ -1,5 +1,7 @@
 # OpenAgent for Obsidian
 
+> **Note:** This is a fork, maintained at [DecibillyJoel/obsidian-openagent](https://github.com/DecibillyJoel/obsidian-openagent). The original plugin is [nikitaclicks/obsidian-openagent](https://github.com/nikitaclicks/obsidian-openagent) by nikitaclicks. This fork adds local changes and is not affiliated with the upstream author.
+
 An AI agent that lives inside your vault — vault-aware, tool-capable, BYOK, and cross-platform (desktop + mobile).
 
 > **Hackathon build:** See [hackathon/README.md](./hackathon/README.md) for the Gemma 4 hackathon submission story, local MLX setup, eval results, and demo assets.
@@ -51,7 +53,7 @@ Your API key is stored in `.obsidian/plugins/open-agent/data.json`. If you sync 
 ## Development
 
 ```bash
-git clone https://github.com/nikitaclicks/obsidian-openagent.git
+git clone https://github.com/DecibillyJoel/obsidian-openagent.git
 cd obsidian-openagent
 npm install
 npm run dev        # esbuild watch → writes main.js

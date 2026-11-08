@@ -41,11 +41,20 @@ export class OpenAICompatibleProvider implements ModelProvider {
 		let responseStatus = 0;
 		let degraded = false;
 		try {
-			const primary = await requestCompletion(url, headers, this.config.model, messages, tools, opts.responseFormat);
+			const imageMode = oaImageOutputModels.has(this.config.model);
+			const primary = await requestCompletion(
+				url,
+				headers,
+				this.config.model,
+				messages,
+				tools,
+				opts.responseFormat,
+				imageMode,
+			);
 			responseText = primary.text;
 			responseStatus = primary.status;
 			if (opts.responseFormat && shouldRetryWithoutResponseFormat(primary.status, primary.text)) {
-				const fallback = await requestCompletion(url, headers, this.config.model, messages, tools);
+				const fallback = await requestCompletion(url, headers, this.config.model, messages, tools, undefined, imageMode);
 				responseText = fallback.text;
 				responseStatus = fallback.status;
 				degraded = true;
@@ -73,6 +82,11 @@ export class OpenAICompatibleProvider implements ModelProvider {
 			yield { kind: "text", text, degraded: degraded || undefined };
 		}
 
+		const urls = oaResponseImageUrls(choice.message);
+		if (urls.length > 0) {
+			yield { kind: "images", urls };
+		}
+
 		const calls = parseCompletionToolCalls(choice.message?.tool_calls);
 		if (calls.length > 0) {
 			yield { kind: "tool_call_assembled", calls, degraded: degraded || undefined };
@@ -92,7 +106,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
 				throw: false,
 			});
 			if (res.status >= 400) return [];
-			return parseModelIds(res.text).sort();
+			oaRememberImageOutputModels(res.text);
+			return oaFilterModelIds(res.text, "text").sort();
 		} catch {
 			return [];
 		}
@@ -114,6 +129,7 @@ async function requestCompletion(
 	messages: ChatMessage[],
 	tools?: OpenAiToolSpec[],
 	responseFormat?: StreamOptions["responseFormat"],
+	imageMode = false,
 ): Promise<{ status: number; text: string }> {
 	const body = JSON.stringify({
 		model,
@@ -121,6 +137,7 @@ async function requestCompletion(
 		stream: false,
 		...(tools ? { tools, tool_choice: "auto" } : {}),
 		...(responseFormat ? { response_format: responseFormat } : {}),
+		...(imageMode ? { modalities: ["text", "image"] } : {}),
 	});
 	const response = await requestUrl({
 		url,
@@ -167,7 +184,7 @@ function shouldRetryWithoutResponseFormat(status: number, text: string): boolean
 }
 
 function parseChatCompletionChoice(responseText: string): {
-	message?: { content?: unknown; tool_calls?: unknown; reasoning_content?: unknown };
+	message?: { content?: unknown; tool_calls?: unknown; reasoning_content?: unknown; images?: unknown };
 	finish_reason?: string | null;
 } | null {
 	const parsed = parseJsonResponse(responseText);
@@ -180,6 +197,7 @@ function parseChatCompletionChoice(responseText: string): {
 				content: choice.message.content,
 				tool_calls: choice.message.tool_calls,
 				reasoning_content: choice.message.reasoning_content,
+				images: choice.message.images,
 			}
 			: undefined,
 		finish_reason:
@@ -254,16 +272,102 @@ function extractMessagePartText(part: unknown): string {
 	return "";
 }
 
-function parseModelIds(responseText: string): string[] {
-	const parsed = parseJsonResponse(responseText);
-	if (!isRecord(parsed) || !Array.isArray(parsed.data)) return [];
-	const ids: string[] = [];
-	for (const entry of parsed.data) {
-		if (isRecord(entry) && typeof entry.id === "string" && entry.id.length > 0) {
-			ids.push(entry.id);
+// Some endpoints return no architecture metadata. In that case treat every
+// non-batch model id as usable for both text and image output.
+const oaImageOutputModels = new Set<string>();
+const oaKnownModelOutputs = new Map<string, Set<string>>();
+
+function oaResponseImageUrls(message: unknown): string[] {
+	const urls: string[] = [];
+	const push = (value: unknown): void => {
+		if (typeof value === "string" && /^(?:data:image\/|https:\/\/)/i.test(value)) urls.push(value);
+	};
+	const collect = (part: Record<string, unknown>): void => {
+		push(part.url);
+		push(part.image_url);
+		if (isRecord(part.image_url)) push(part.image_url.url);
+		if (isRecord(part.source)) push(part.source.url);
+		if (typeof part.b64_json === "string") {
+			const mediaType = typeof part.media_type === "string" ? part.media_type : "image/png";
+			push(`data:${mediaType};base64,${part.b64_json}`);
+		}
+		if (typeof part.data === "string" && typeof part.media_type === "string") {
+			push(`data:${part.media_type};base64,${part.data}`);
+		}
+		if (isRecord(part.source) && typeof part.source.data === "string") {
+			const mediaType = typeof part.source.media_type === "string" ? part.source.media_type : "image/png";
+			push(`data:${mediaType};base64,${part.source.data}`);
+		}
+	};
+	if (!isRecord(message)) return urls;
+	if (Array.isArray(message.images)) for (const part of message.images) if (isRecord(part)) collect(part);
+	if (Array.isArray(message.content)) {
+		for (const part of message.content) {
+			if (isRecord(part) && /image/i.test(String(part.type ?? ""))) collect(part);
 		}
 	}
-	return ids;
+	return [...new Set(urls)];
+}
+
+function oaIsBatchModel(id: string): boolean {
+	return /:batch(?:$|:)/i.test(id);
+}
+
+function oaModelRecords(responseText: string): Record<string, unknown>[] {
+	const parsed = parseJsonResponse(responseText);
+	if (!isRecord(parsed)) return [];
+	const data = parsed.data;
+	if (!Array.isArray(data)) return [];
+	return data.filter(isRecord);
+}
+
+function oaOutputModalities(record: Record<string, unknown>): string[] {
+	const architecture = isRecord(record.architecture) ? record.architecture : null;
+	if (!architecture || !Array.isArray(architecture.output_modalities)) return [];
+	return architecture.output_modalities.filter((value): value is string => typeof value === "string");
+}
+
+function oaFilterModelIds(responseText: string, kind: string, imageMode = false): string[] {
+	const ids: string[] = [];
+	for (const record of oaModelRecords(responseText)) {
+		if (typeof record.id !== "string" || !record.id || oaIsBatchModel(record.id)) continue;
+		const modalities = oaOutputModalities(record);
+		if ((!imageMode && modalities.length === 0) || modalities.includes(kind)) ids.push(record.id);
+	}
+	return [...new Set(ids)].sort();
+}
+
+function oaRememberImageOutputModels(responseText: string): void {
+	for (const record of oaModelRecords(responseText)) {
+		if (typeof record.id !== "string" || oaIsBatchModel(record.id)) continue;
+		const modalities = oaOutputModalities(record);
+		if (modalities.length > 0) oaKnownModelOutputs.set(record.id, new Set(modalities));
+		if (modalities.includes("image")) oaImageOutputModels.add(record.id);
+	}
+}
+
+export function oaModelEligibleOrUnknown(id: string, kind: string): boolean {
+	if (!id || oaIsBatchModel(id)) return false;
+	const known = oaKnownModelOutputs.get(id);
+	return !known || known.has(kind);
+}
+
+export async function oaFetchModelIds(baseUrl: string, apiKey: string, kind = "text"): Promise<string[]> {
+	if (!baseUrl.trim()) return [];
+	try {
+		const base = baseUrl.replace(/\/$/, "");
+		const res = await requestUrl({
+			url: kind === "image" ? `${base}/images/models` : `${base}/models`,
+			method: "GET",
+			headers: { Authorization: `Bearer ${apiKey}` },
+			throw: false,
+		});
+		if (res.status >= 400) return [];
+		oaRememberImageOutputModels(res.text);
+		return oaFilterModelIds(res.text, kind, kind === "image");
+	} catch {
+		return [];
+	}
 }
 
 function parseJsonResponse(text: string): unknown | null {

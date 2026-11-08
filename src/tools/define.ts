@@ -6,6 +6,9 @@ interface ToolSpec<TArgs> {
 	schema: JsonSchema;
 	category: ToolCategory;
 	mutates: boolean;
+	requiresApproval?: boolean; // default true — set false to skip the consent prompt
+	stopOnFailure?: boolean; // default false — when true, a failed call ends the run
+	timeoutMs?: number;
 	run(args: TArgs, ctx: ToolContext): Promise<ToolResult>;
 }
 

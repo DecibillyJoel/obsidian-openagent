@@ -1,4 +1,4 @@
-import { type App, TFile } from "obsidian";
+import { type App, TFile, TFolder } from "obsidian";
 import { type UndoBuffer } from "../../consent/undo";
 import { defineTool, fail, ok } from "../define";
 import { PathError, safeVaultPath } from "./path-safe";
@@ -12,15 +12,25 @@ interface Args {
 export function appendTool(app: App, undo: UndoBuffer) {
 	return defineTool<Args>({
 		name: "vault_append",
-		description: "Append content to an existing note. Refuses to create new files. Ensures a newline separator by default.",
+		description:
+			"Append text to an EXISTING TEXT FILE. The tool never creates a file and rejects folders. By default it inserts one newline before the appended content only when the existing file is non-empty and lacks a trailing newline.",
 		category: "vault_write",
 		mutates: true,
 		schema: {
 			type: "object",
 			properties: {
-				path: { type: "string", description: "Vault-relative path of an existing file" },
-				content: { type: "string", description: "Text to append" },
-				ensureNewline: { type: "boolean", description: "Prepend newline if file doesn't end with one (default true)" },
+				path: {
+					type: "string",
+					description: "Exact vault-relative path of an EXISTING TEXT FILE, including its extension such as `.md`.",
+				},
+				content: {
+					type: "string",
+					description: "Literal text to append; it is not parsed as frontmatter.",
+				},
+				ensureNewline: {
+					type: "boolean",
+					description: "When true (default), insert a newline separator if the existing non-empty file lacks one.",
+				},
 			},
 			required: ["path", "content"],
 		},
@@ -33,6 +43,7 @@ export function appendTool(app: App, undo: UndoBuffer) {
 				throw e;
 			}
 			const file = app.vault.getAbstractFileByPath(p);
+			if (file instanceof TFolder) return fail(`IsFolder: ${p}`);
 			if (!(file instanceof TFile)) return fail(`NotFound: ${p}`);
 
 			const before = await app.vault.read(file);

@@ -1,9 +1,14 @@
 import type { PackCitation, PackRunTransparency } from "./packs/runtime";
+import type { PendingImage } from "./images/attachments";
+import type { GeneratedImage } from "./types";
+import { oaSanitizeGeneratedImages } from "./tools/image-generate";
 
 export interface SessionMeta {
 	id: string;
 	title: string;
 	model: string;
+	textModel?: string | null;
+	imageModel?: string;
 	selectedPackId?: string | null;
 	lastClassicModel?: string;
 	createdAt: number;
@@ -63,6 +68,8 @@ export type StoredPackCitation = PackCitation;
 export interface StoredTurn {
 	role: "user" | "assistant";
 	content: string;
+	images?: PendingImage[];
+	generatedImages?: GeneratedImage[];
 	packTurn?: StoredPackTurnData;
 }
 
@@ -170,10 +177,12 @@ export class SessionStore {
 				await this.cb.writeTurns(s.id, s.turns).catch(() => {});
 			}
 		}
-		const meta: SessionMeta[] = rawSessions.map(({ id, title, model, selectedPackId, lastClassicModel, createdAt, updatedAt }) => ({
+		const meta: SessionMeta[] = rawSessions.map(({ id, title, model, textModel, imageModel, selectedPackId, lastClassicModel, createdAt, updatedAt }) => ({
 			id,
 			title,
 			model,
+			textModel: typeof textModel === "string" ? textModel : null,
+			imageModel: typeof imageModel === "string" ? imageModel : "",
 			selectedPackId: selectedPackId ?? null,
 			lastClassicModel: lastClassicModel ?? model,
 			createdAt,
@@ -237,6 +246,8 @@ export class SessionStore {
 			const m = this.meta[0];
 			m.title = "New chat";
 			m.model = "";
+			m.textModel = "";
+			m.imageModel = "";
 			m.selectedPackId = null;
 			m.lastClassicModel = "";
 			m.updatedAt = Date.now();
@@ -276,8 +287,19 @@ export class SessionStore {
 	async updateModel(id: string, model: string): Promise<void> {
 		const m = this.meta.find((s) => s.id === id);
 		if (!m) return;
-		m.model = model;
-		m.lastClassicModel = model;
+		m.textModel = model;
+		if (model.trim().length > 0) {
+			m.model = model;
+			m.lastClassicModel = model;
+		}
+		m.updatedAt = Date.now();
+		await this.cb.persistIndex(this.meta, this.activeId);
+	}
+
+	async updateImageModel(id: string, imageModel: string): Promise<void> {
+		const m = this.meta.find((s) => s.id === id);
+		if (!m) return;
+		m.imageModel = imageModel;
 		m.updatedAt = Date.now();
 		await this.cb.persistIndex(this.meta, this.activeId);
 	}
@@ -311,6 +333,8 @@ export class SessionStore {
 			id: makeId(),
 			title: "New chat",
 			model: "",
+			textModel: "",
+			imageModel: "",
 			selectedPackId: null,
 			lastClassicModel: "",
 			createdAt: now,
@@ -326,11 +350,18 @@ function sanitizeStoredTurns(turns: unknown[]): StoredTurn[] {
 function sanitizeStoredTurn(turn: unknown): StoredTurn {
 	if (!turn || typeof turn !== "object") return turn as StoredTurn;
 	const packTurn = (turn as { packTurn?: unknown }).packTurn;
-	if (!packTurn || typeof packTurn !== "object") return turn as StoredTurn;
-	return {
-		...(turn as StoredTurn),
-		packTurn: sanitizeStoredPackTurn(packTurn),
-	};
+	const hasGeneratedImages = Object.prototype.hasOwnProperty.call(turn, "generatedImages");
+	if ((!packTurn || typeof packTurn !== "object") && !hasGeneratedImages) return turn as StoredTurn;
+	const result = { ...(turn as StoredTurn) };
+	if (packTurn && typeof packTurn === "object") {
+		result.packTurn = sanitizeStoredPackTurn(packTurn);
+	}
+	if (hasGeneratedImages) {
+		result.generatedImages = oaSanitizeGeneratedImages(
+			(turn as { generatedImages?: unknown }).generatedImages,
+		);
+	}
+	return result;
 }
 
 function sanitizeStoredPackTurn(turn: unknown): StoredPackTurnData {

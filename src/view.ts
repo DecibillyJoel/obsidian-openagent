@@ -1,17 +1,32 @@
-import { type App, ItemView, MarkdownRenderer, Modal, Notice, TFile, WorkspaceLeaf } from "obsidian";
+import { type App, htmlToMarkdown, ItemView, MarkdownRenderer, Modal, Notice, TFile, WorkspaceLeaf } from "obsidian";
 import type { ConsentChoice, ConsentManager } from "./consent/manager";
 import type { UndoBuffer } from "./consent/undo";
 import { diffLines, type DiffRow } from "./consent/diff";
 import { renderRows } from "./consent/render-diff";
 import { runTurn } from "./loop";
 import { isMobile } from "./platform";
-import { OpenAICompatibleProvider } from "./provider";
+import { OpenAICompatibleProvider, oaFetchModelIds } from "./provider";
 import { resolveCitationTarget } from "./citations";
+import {
+	oaDetectImageMime,
+	oaMultimodalContent,
+	oaResolveToolImages,
+	oaSanitizeImages,
+	OA_IMAGE_MIMES,
+	OA_MAX_IMAGE_BYTES,
+	OA_MAX_IMAGES,
+	OA_MAX_TOTAL_IMAGE_BYTES,
+	type PendingImage,
+} from "./images/attachments";
+import { oaBytesToDataUrl, oaDecodeImageToPng, oaImageUrlToPngDataUrl } from "./images/png";
+import { oaExtractDisplayedImageEmbeds } from "./images/references";
+import { oaPersistInlineModelImage } from "./images/model-images";
 import type { ExactPhraseAnchor } from "./agents/verifier";
 import { PackConfigError, PackRunError, type PackRuntimeEvent, type PackRunResult, type PackRunTransparency } from "./packs/runtime";
 import type { AgentPack } from "./packs/types";
 import { isConfigured, type PluginSettings } from "./settings";
 import type {
+	SessionMeta,
 	SessionStore,
 	StoredPackClaim,
 	StoredPackProgressStep,
@@ -20,7 +35,10 @@ import type {
 } from "./sessions";
 import { splitFrontmatter, mergeFrontmatter, stitchFrontmatter } from "./tools/vault/frontmatter";
 import type { ToolRegistry } from "./tools/registry";
-import { AuthError, type ChatMessage, NetworkError, ProviderError, RateLimitError, type ToolResult } from "./types";
+import { oaSanitizeGeneratedImages } from "./tools/image-generate";
+import { runWithTimeout, ToolTimeoutError, DEFAULT_TOOL_TIMEOUT_MS } from "./tools/timeout";
+import { validateArgs } from "./tools/validate";
+import { AuthError, type ChatMessage, NetworkError, ProviderError, RateLimitError, type ToolResult, type ConversationImageReference, type GeneratedImage } from "./types";
 
 export const CHAT_VIEW_TYPE = "open-agent-chat";
 
@@ -75,6 +93,7 @@ interface ToolCallRecord {
 	mutates: boolean;
 	status: "running" | "awaiting-consent" | "ok" | "error" | "denied";
 	result?: ToolResult;
+	approvedPending?: boolean;
 	diffRows?: DiffRow[]; // undefined = not yet computed; [] = computed, nothing to show
 }
 
@@ -83,6 +102,8 @@ type AssistantSegment = { kind: "text"; text: string } | { kind: "tool"; id: str
 interface UiTurn {
 	role: "user" | "assistant";
 	content: string; // user turns only
+	images?: PendingImage[]; // user turns: image attachments sent with the message
+	generatedImages?: GeneratedImage[]; // assistant turns: images generated into the vault during the turn
 	segments: AssistantSegment[]; // assistant turns: text and tool cards in order
 	toolCallMap: Record<string, ToolCallRecord>; // assistant turns: looked up by id
 	thinking: boolean; // true until first content arrives
@@ -121,13 +142,26 @@ export class ChatView extends ItemView {
 	private stopBtn!: HTMLButtonElement;
 	private hintEl!: HTMLElement;
 
+	// Image attachment state (Classic mode)
+	private pendingImagesEl!: HTMLElement;
+	private imageInputEl!: HTMLInputElement;
+	private attachBtn!: HTMLButtonElement;
+	private pendingImages: PendingImage[] = [];
+
 	// Header elements
+	private headerEl!: HTMLElement;
+	private headerBodyEl!: HTMLElement;
+	private headerToggleEl!: HTMLButtonElement;
+	private headerCollapsed = false;
 	private sessionTitleEl!: HTMLElement;
 	private sessionRenameEl!: HTMLInputElement;
 	private sessionsPanelEl!: HTMLElement;
 	private sessionsListEl!: HTMLElement;
 	private sessionsSearchEl!: HTMLInputElement;
 	private modelInputEl!: HTMLSelectElement;
+	private imageModelInputEl!: HTMLSelectElement;
+	private imageModelCatalog: string[] = [];
+	private textModelCatalog: string[] = [];
 	private modeSelectEl!: HTMLSelectElement;
 	private packSummaryEl!: HTMLElement;
 	private packHintEl!: HTMLElement;
@@ -187,7 +221,40 @@ export class ChatView extends ItemView {
 		this.inputEl.setSelectionRange(text.length, text.length);
 	}
 
-	onOpen(): Promise<void> {
+	handleTranscriptCopy(event: ClipboardEvent): void {
+		const selection = this.transcriptEl.ownerDocument.getSelection();
+		if (!selection || selection.rangeCount === 0 || selection.isCollapsed || !event.clipboardData) return;
+
+		const range = selection.getRangeAt(0);
+		const node = range.commonAncestorContainer;
+		const host = node.nodeType === 1 ? node : node.parentElement;
+		if (!host || !this.transcriptEl.contains(host)) return;
+
+		const container = this.transcriptEl.ownerDocument.createElement("div");
+		container.appendChild(range.cloneContents());
+
+		let markdown: string;
+		try {
+			markdown = htmlToMarkdown(container).trim();
+		} catch {
+			return;
+		}
+		if (!markdown) return;
+
+		try {
+			event.clipboardData.setData("text/plain", markdown);
+		} catch {
+			return;
+		}
+		try {
+			event.clipboardData.setData("text/html", container.innerHTML);
+		} catch {
+			// Keep the plain-text representation when the HTML write fails.
+		}
+		event.preventDefault();
+	}
+
+	async onOpen(): Promise<void> {
 		const root = this.contentEl;
 		root.empty();
 		root.addClass("open-agent-view");
@@ -195,11 +262,48 @@ export class ChatView extends ItemView {
 		this.hintEl = root.createDiv({ cls: "open-agent-hint" });
 		this.buildHeader(root);
 		this.transcriptEl = root.createDiv({ cls: "open-agent-transcript" });
+		this.transcriptEl.addEventListener("copy", (event) => this.handleTranscriptCopy(event));
+		root.addEventListener("dragover", (event) => {
+			if (!event.dataTransfer) return;
+			const hasImage = Array.from(event.dataTransfer.items).some(
+				(item) => item.kind === "file" && item.type.startsWith("image/"),
+			);
+			if (hasImage) event.preventDefault();
+		});
+		root.addEventListener("drop", (event) => {
+			const files = event.dataTransfer ? Array.from(event.dataTransfer.files) : [];
+			const images = files.filter((file) => file.type.startsWith("image/"));
+			if (images.length === 0) return;
+			event.preventDefault();
+			void this.addImageFiles(images);
+		});
 
 		const composer = root.createDiv({ cls: "open-agent-composer" });
+		this.pendingImagesEl = composer.createDiv({ cls: "open-agent-image-previews" });
 		this.inputEl = composer.createEl("textarea", {
 			cls: "open-agent-input",
 			attr: { rows: "3", placeholder: "Ask the agent…" },
+		});
+		this.imageInputEl = composer.createEl("input", {
+			cls: "open-agent-image-input",
+			attr: {
+				type: "file",
+				accept: "image/png,image/jpeg,image/webp,image/gif",
+				multiple: "",
+				hidden: "",
+			},
+		});
+		this.imageInputEl.addEventListener("change", () => {
+			const files = this.imageInputEl.files ? Array.from(this.imageInputEl.files) : [];
+			this.imageInputEl.value = "";
+			void this.addImageFiles(files);
+		});
+		this.inputEl.addEventListener("paste", (event) => {
+			const files = event.clipboardData ? Array.from(event.clipboardData.files) : [];
+			const images = files.filter((file) => file.type.startsWith("image/"));
+			if (images.length === 0) return;
+			event.preventDefault();
+			void this.addImageFiles(images);
 		});
 		this.inputEl.addEventListener("keydown", (e) => {
 			if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
@@ -209,6 +313,9 @@ export class ChatView extends ItemView {
 		});
 
 		const buttons = composer.createDiv({ cls: "open-agent-buttons" });
+		this.attachBtn = buttons.createEl("button", { text: "Attach images" });
+		this.attachBtn.setAttribute("aria-label", "Attach images (vision-capable models only)");
+		this.attachBtn.addEventListener("click", () => this.imageInputEl.click());
 		this.sendBtn = buttons.createEl("button", { text: "Send", cls: "mod-cta" });
 		this.sendBtn.addEventListener("click", () => void this.handleSend());
 		this.stopBtn = buttons.createEl("button", { text: "Stop" });
@@ -219,7 +326,7 @@ export class ChatView extends ItemView {
 
 		// Load active session turns
 		const session = this.deps.sessionStore.getActive();
-		this.turns = this.storedToUiTurns(session.turns);
+		this.turns = await this.storedToUiTurns(session.turns);
 
 		this.refreshConfiguredState();
 		void this.populateModelDatalist();
@@ -245,9 +352,20 @@ export class ChatView extends ItemView {
 
 	private buildHeader(root: HTMLElement): void {
 		const header = root.createDiv({ cls: "open-agent-header" });
+		this.headerEl = header;
+
+		// The toggle button stays visible while the settings body collapses (I8).
+		this.headerToggleEl = header.createEl("button", {
+			cls: "open-agent-header-toggle",
+			text: "▾ Hide chat controls",
+			attr: { "aria-label": "Collapse chat controls", "aria-expanded": "true" },
+		});
+		this.headerToggleEl.addEventListener("click", () => this.toggleHeaderCollapsed());
+		const body = header.createDiv({ cls: "open-agent-header-body" });
+		this.headerBodyEl = body;
 
 		// Session bar
-		const sessionBar = header.createDiv({ cls: "open-agent-session-bar" });
+		const sessionBar = body.createDiv({ cls: "open-agent-session-bar" });
 
 		// Clickable title → inline rename
 		this.sessionTitleEl = sessionBar.createEl("span", { cls: "open-agent-session-title" });
@@ -279,7 +397,7 @@ export class ChatView extends ItemView {
 		deleteBtn.addEventListener("click", () => { void this.deleteActiveSession(); });
 
 		// Sessions panel (hidden by default)
-		this.sessionsPanelEl = header.createDiv({ cls: "open-agent-sessions-panel" });
+		this.sessionsPanelEl = body.createDiv({ cls: "open-agent-sessions-panel" });
 		this.sessionsPanelEl.addClass("is-hidden");
 
 		this.sessionsSearchEl = this.sessionsPanelEl.createEl("input", {
@@ -292,35 +410,51 @@ export class ChatView extends ItemView {
 
 		this.sessionsListEl = this.sessionsPanelEl.createDiv({ cls: "open-agent-sessions-list" });
 
-		const modeBar = header.createDiv({ cls: "open-agent-mode-bar" });
+		const modeBar = body.createDiv({ cls: "open-agent-mode-bar" });
 		modeBar.createEl("span", { text: "Mode:", cls: "open-agent-model-label" });
 		this.modeSelectEl = modeBar.createEl("select", { cls: "open-agent-mode-select" });
 		this.modeSelectEl.addEventListener("change", () => { void this.handleModeChange(); });
 
 		// Model bar
-		const modelBar = header.createDiv({ cls: "open-agent-model-bar" });
+		const modelBar = body.createDiv({ cls: "open-agent-model-bar" });
 		modelBar.createEl("span", { text: "Model:", cls: "open-agent-model-label" });
 
 		this.modelInputEl = modelBar.createEl("select", { cls: "open-agent-model-input" });
 		this.modelInputEl.addEventListener("change", () => { void this.handleModelChange(); });
-		this.packSummaryEl = header.createDiv({ cls: "open-agent-pack-summary" });
-		this.packHintEl = header.createDiv({ cls: "open-agent-pack-hint", text: "Applies to future turns in this chat." });
-		this.packRecoveryEl = header.createDiv({ cls: "open-agent-pack-recovery" });
-		this.packMobileBannerEl = header.createDiv({ cls: "open-agent-pack-mobile-banner" });
-		this.sessionRecoveryEl = header.createDiv({ cls: "open-agent-session-recovery" });
+
+		// Image model bar
+		const imageModelBar = body.createDiv({ cls: "open-agent-model-bar" });
+		imageModelBar.createEl("span", { text: "Image:", cls: "open-agent-model-label" });
+		this.imageModelInputEl = imageModelBar.createEl("select", { cls: "open-agent-model-input" });
+		this.imageModelInputEl.addEventListener("change", () => { void this.handleImageModelChange(); });
+
+		this.packSummaryEl = body.createDiv({ cls: "open-agent-pack-summary" });
+		this.packHintEl = body.createDiv({ cls: "open-agent-pack-hint", text: "Applies to future turns in this chat." });
+		this.packRecoveryEl = body.createDiv({ cls: "open-agent-pack-recovery" });
+		this.packMobileBannerEl = body.createDiv({ cls: "open-agent-pack-mobile-banner" });
+		this.sessionRecoveryEl = body.createDiv({ cls: "open-agent-session-recovery" });
 
 		this.refreshHeader();
+	}
+
+	private toggleHeaderCollapsed(): void {
+		this.headerCollapsed = !this.headerCollapsed;
+		this.headerBodyEl.classList.toggle("is-hidden", this.headerCollapsed);
+		this.headerEl.classList.toggle("is-collapsed", this.headerCollapsed);
+		this.headerToggleEl.setAttribute("aria-expanded", this.headerCollapsed ? "false" : "true");
+		this.headerToggleEl.setAttribute(
+			"aria-label",
+			this.headerCollapsed ? "Expand chat controls" : "Collapse chat controls",
+		);
+		this.headerToggleEl.setText(this.headerCollapsed ? "▸ Show chat controls" : "▾ Hide chat controls");
 	}
 
 	private refreshHeader(): void {
 		const active = this.deps.sessionStore.getActive();
 		const settings = this.deps.getSettings();
 		this.sessionTitleEl.setText(active.title);
-		const currentModel = active.lastClassicModel?.trim() || active.model.trim() || settings.model;
-		if (currentModel && !Array.from(this.modelInputEl.options).some((o) => o.value === currentModel)) {
-			this.modelInputEl.add(new Option(currentModel, currentModel), 0);
-		}
-		this.modelInputEl.value = currentModel;
+		this.refreshTextModelOptions(active, settings);
+		this.refreshImageModelOptions(active, settings);
 
 		this.modeSelectEl.empty();
 		this.modeSelectEl.createEl("option", { value: "", text: "Classic" });
@@ -340,6 +474,9 @@ export class ChatView extends ItemView {
 
 		if (this.modelInputEl.parentElement) {
 			this.modelInputEl.parentElement.classList.toggle("is-hidden", packMode);
+		}
+		if (this.imageModelInputEl.parentElement) {
+			this.imageModelInputEl.parentElement.classList.toggle("is-hidden", packMode);
 		}
 		this.packSummaryEl.classList.toggle("is-hidden", !packMode);
 		this.packHintEl.classList.toggle("is-hidden", !packMode);
@@ -395,6 +532,8 @@ export class ChatView extends ItemView {
 	private async createSession(): Promise<void> {
 		await this.deps.sessionStore.create();
 		this.turns = [];
+		this.pendingImages = [];
+		this.renderPendingImages();
 		this.deps.undo.clear();
 		this.refreshHeader();
 		this.renderTranscript();
@@ -411,7 +550,9 @@ export class ChatView extends ItemView {
 		const id = this.deps.sessionStore.getActive().id;
 		await this.deps.sessionStore.delete(id);
 		const session = this.deps.sessionStore.getActive();
-		this.turns = this.storedToUiTurns(session.turns);
+		this.turns = await this.storedToUiTurns(session.turns);
+		this.pendingImages = [];
+		this.renderPendingImages();
 		this.deps.undo.clear();
 		this.refreshHeader();
 		this.renderTranscript();
@@ -428,9 +569,68 @@ export class ChatView extends ItemView {
 	}
 
 	private async handleModelChange(): Promise<void> {
-		const model = this.modelInputEl.value.trim();
+		const model = this.modelInputEl.value;
 		const session = this.deps.sessionStore.getActive();
 		await this.deps.sessionStore.updateModel(session.id, model);
+	}
+
+	private getSessionTextOverride(
+		session: SessionMeta = this.deps.sessionStore.getActive(),
+		settings: PluginSettings = this.deps.getSettings(),
+	): string {
+		if (typeof session.textModel === "string") return session.textModel.trim();
+		const candidate = session.lastClassicModel?.trim() || session.model?.trim() || "";
+		return candidate && candidate !== settings.model?.trim() ? candidate : "";
+	}
+
+	private refreshTextModelOptions(
+		session: SessionMeta = this.deps.sessionStore.getActive(),
+		settings: PluginSettings = this.deps.getSettings(),
+	): void {
+		if (!this.modelInputEl) return;
+		let selected = this.getSessionTextOverride(session, settings);
+		let global = settings.model?.trim() ?? "";
+		if (this.textModelCatalog.length > 0) {
+			if (!this.textModelCatalog.includes(selected)) selected = "";
+			if (!this.textModelCatalog.includes(global)) global = "";
+		}
+		const extras = [...this.modelInputEl.options]
+			.map((o) => o.value)
+			.filter((v) => v && v !== selected && v !== global);
+		this.modelInputEl.empty();
+		this.modelInputEl.add(new Option(global ? `Default: ${global}` : "Default: not configured", ""));
+		if (selected) this.modelInputEl.add(new Option(selected, selected));
+		if (global && global !== selected) this.modelInputEl.add(new Option(global, global));
+		for (const value of extras) this.modelInputEl.add(new Option(value, value));
+		this.modelInputEl.value = selected;
+	}
+
+	private async handleImageModelChange(): Promise<void> {
+		const value = this.imageModelInputEl.value;
+		const session = this.deps.sessionStore.getActive();
+		await this.deps.sessionStore.updateImageModel(session.id, value);
+	}
+
+	private refreshImageModelOptions(
+		session: SessionMeta = this.deps.sessionStore.getActive(),
+		settings: PluginSettings = this.deps.getSettings(),
+	): void {
+		if (!this.imageModelInputEl) return;
+		let selected = session.imageModel?.trim() ?? "";
+		let global = settings.imageModel?.trim() ?? "";
+		if (this.imageModelCatalog.length > 0) {
+			if (!this.imageModelCatalog.includes(selected)) selected = "";
+			if (!this.imageModelCatalog.includes(global)) global = "";
+		}
+		const extras = [...this.imageModelInputEl.options]
+			.map((o) => o.value)
+			.filter((v) => v && v !== selected && v !== global);
+		this.imageModelInputEl.empty();
+		this.imageModelInputEl.add(new Option(global ? `Default: ${global}` : "Default: not configured", ""));
+		if (selected) this.imageModelInputEl.add(new Option(selected, selected));
+		if (global && global !== selected) this.imageModelInputEl.add(new Option(global, global));
+		for (const value of extras) this.imageModelInputEl.add(new Option(value, value));
+		this.imageModelInputEl.value = selected;
 	}
 
 	private async refreshPacks(): Promise<void> {
@@ -552,7 +752,9 @@ export class ChatView extends ItemView {
 		await this.deps.sessionStore.switchTo(sessionId);
 		const session = this.deps.sessionStore.getActive();
 		// Prefer live in-memory turns (stream still running) over stale stored state
-		this.turns = this.liveTurns.get(sessionId) ?? this.storedToUiTurns(session.turns);
+		this.turns = this.liveTurns.get(sessionId) ?? (await this.storedToUiTurns(session.turns));
+		this.pendingImages = [];
+		this.renderPendingImages();
 		this.deps.undo.clear();
 		this.refreshHeader();
 		this.refreshBusyState();
@@ -567,15 +769,39 @@ export class ChatView extends ItemView {
 			apiKey: settings.apiKey,
 			model: settings.model,
 		});
-		const models = await provider.listModels();
-		if (models.length === 0) return;
-		const current = this.modelInputEl.value;
-		while (this.modelInputEl.options.length > 0) this.modelInputEl.remove(0);
-		const allModels = current && !models.includes(current) ? [current, ...models] : models;
-		for (const m of allModels) {
-			this.modelInputEl.add(new Option(m, m));
+		const [models, imageModels] = await Promise.all([
+			provider.listModels(),
+			oaFetchModelIds(settings.baseUrl, settings.apiKey, "image"),
+		]);
+		if (models.length > 0) {
+			this.textModelCatalog = models;
+			const session = this.deps.sessionStore.getActive();
+			let selected = this.getSessionTextOverride(session, settings);
+			let global = settings.model?.trim() ?? "";
+			if (!models.includes(selected)) selected = "";
+			if (!models.includes(global)) global = "";
+			this.modelInputEl.empty();
+			this.modelInputEl.add(new Option(global ? `Default: ${global}` : "Default: not configured", ""));
+			for (const m of models) this.modelInputEl.add(new Option(m, m));
+			this.modelInputEl.value = selected;
 		}
-		this.modelInputEl.value = current || allModels[0] || "";
+		if (imageModels.length > 0) {
+			this.imageModelCatalog = imageModels;
+			const session = this.deps.sessionStore.getActive();
+			let selected = session.imageModel?.trim() ?? "";
+			let global = settings.imageModel?.trim() ?? "";
+			if (!imageModels.includes(selected)) selected = "";
+			if (!imageModels.includes(global)) global = "";
+			this.imageModelInputEl.empty();
+			this.imageModelInputEl.add(new Option(global ? `Default: ${global}` : "Default: not configured", ""));
+			const options = [...new Set([selected, global, ...imageModels].filter(Boolean))].filter((m) =>
+				imageModels.includes(m),
+			);
+			for (const value of options) this.imageModelInputEl.add(new Option(value, value));
+			this.imageModelInputEl.value = selected;
+		} else {
+			this.refreshImageModelOptions();
+		}
 	}
 
 	// ─── Render debounce ─────────────────────────────────────────────────────
@@ -598,50 +824,95 @@ export class ChatView extends ItemView {
 
 	// ─── Session helpers ──────────────────────────────────────────────────────
 
-	private storedToUiTurns(stored: StoredTurn[]): UiTurn[] {
-		return stored.map((st) => {
-			if (st.role === "user") {
-				return { role: "user", content: st.content, segments: [], toolCallMap: {}, thinking: false } as UiTurn;
-			}
-			if (st.packTurn) {
+	private async storedToUiTurns(stored: StoredTurn[]): Promise<UiTurn[]> {
+		return Promise.all(
+			stored.map(async (st) => {
+				if (st.role === "user") {
+					return {
+						role: "user",
+						content: st.content,
+						images: await this.normalizeConversationImagesToPng(oaSanitizeImages(st.images)),
+						segments: [],
+						toolCallMap: {},
+						thinking: false,
+					} as UiTurn;
+				}
+				if (st.packTurn) {
+					return {
+						role: "assistant",
+						content: "",
+						segments: [],
+						toolCallMap: {},
+						thinking: false,
+						packTurn: st.packTurn,
+						error: st.packTurn.error,
+						generatedImages: oaSanitizeGeneratedImages(st.generatedImages),
+					} as UiTurn;
+				}
 				return {
 					role: "assistant",
 					content: "",
-					segments: [],
+					segments: [{ kind: "text" as const, text: st.content }],
 					toolCallMap: {},
 					thinking: false,
-					packTurn: st.packTurn,
-					error: st.packTurn.error,
+					generatedImages: oaSanitizeGeneratedImages(st.generatedImages),
 				} as UiTurn;
-			}
-			return {
-				role: "assistant",
-				content: "",
-				segments: [{ kind: "text" as const, text: st.content }],
-				toolCallMap: {},
-				thinking: false,
-			} as UiTurn;
-		});
+			}),
+		);
 	}
 
 	private uiToStoredTurns(turns: UiTurn[]): StoredTurn[] {
 		const result: StoredTurn[] = [];
 		for (const t of turns) {
-			if (t.role === "user" && t.content.length > 0) {
-				result.push({ role: "user", content: t.content });
+			if (t.role === "user" && (t.content.length > 0 || (t.images?.length ?? 0) > 0)) {
+				result.push({
+					role: "user",
+					content: t.content,
+					...(t.images?.length ? { images: t.images } : {}),
+				});
 			} else if (t.role === "assistant") {
+				const generatedImages = t.generatedImages?.length
+					? { generatedImages: t.generatedImages }
+					: {};
 				if (t.packTurn) {
-					result.push({ role: "assistant", content: "", packTurn: t.packTurn });
+					result.push({ role: "assistant", content: "", packTurn: t.packTurn, ...generatedImages });
 					continue;
 				}
 				const text = t.segments
 					.filter((s): s is { kind: "text"; text: string } => s.kind === "text")
 					.map((s) => s.text)
 					.join("");
-				if (text.length > 0) result.push({ role: "assistant", content: text });
+				if (text.length > 0 || t.generatedImages?.length) {
+					result.push({ role: "assistant", content: text, ...generatedImages });
+				}
 			}
 		}
 		return result;
+	}
+
+	private getConversationImages(turns: UiTurn[] = this.turns): ConversationImageReference[] {
+		const list: ConversationImageReference[] = [];
+		for (const turn of turns) {
+			if (turn.role === "user") {
+				for (const image of turn.images ?? []) {
+					if (typeof image.url === "string") list.push({ url: image.url, name: image.name });
+				}
+			} else {
+				for (const image of turn.generatedImages ?? []) {
+					list.push({ path: image.path, name: image.path });
+				}
+				if (turn.role === "assistant") {
+					const text = turn.segments
+						.filter((segment) => segment.kind === "text")
+						.map((segment) => segment.text)
+						.join("");
+					for (const target of oaExtractDisplayedImageEmbeds(text)) {
+						list.push({ path: target, name: target });
+					}
+				}
+			}
+		}
+		return list.slice(-OA_MAX_IMAGES);
 	}
 
 	// ─── Configured / busy state ──────────────────────────────────────────────
@@ -673,6 +944,8 @@ export class ChatView extends ItemView {
 		this.sendBtn.disabled = !(packMode ? packOk : classicOk) || busy;
 		this.stopBtn.disabled = !busy || stopping;
 		this.inputEl.disabled = busy;
+		if (this.attachBtn) this.attachBtn.disabled = busy || packMode;
+		if (this.imageInputEl) this.imageInputEl.disabled = busy || packMode;
 		this.sendBtn.textContent = packMode ? "Run research" : "Send";
 		this.stopBtn.textContent = stopping ? "Stopping..." : "Stop";
 		if (this.sessionsPanelVisible) {
@@ -692,7 +965,8 @@ export class ChatView extends ItemView {
 
 	private async handleClassicSend(): Promise<void> {
 		const text = this.inputEl.value.trim();
-		if (!text) return;
+		const images = [...this.pendingImages];
+		if (!text && images.length === 0) return;
 		const settings = this.deps.getSettings();
 		if (!isConfigured(settings)) {
 			this.refreshConfiguredState();
@@ -701,15 +975,30 @@ export class ChatView extends ItemView {
 
 		const session = this.deps.sessionStore.getActive();
 		const sessionId = session.id;
+		const imageModel =
+			this.imageModelInputEl.value.trim() ||
+			(this.imageModelCatalog.length === 0 || this.imageModelCatalog.includes(settings.imageModel?.trim())
+				? settings.imageModel?.trim()
+				: "") ||
+			"";
 		const isFirstMessage = session.turns.length === 0 && session.title === "New chat";
 
-		this.turns.push({ role: "user", content: text, segments: [], toolCallMap: {}, thinking: false });
-		const assistantTurn: UiTurn = { role: "assistant", content: "", segments: [], toolCallMap: {}, thinking: true };
+		this.turns.push({
+			role: "user",
+			content: text,
+			images: images.length > 0 ? images : undefined,
+			segments: [],
+			toolCallMap: {},
+			thinking: false,
+		});
+		const assistantTurn: UiTurn = { role: "assistant", content: "", segments: [], toolCallMap: {}, thinking: true, generatedImages: [] };
 		this.turns.push(assistantTurn);
 		// Snapshot the turns array reference so the finally block always saves to the right session
 		// even if this.turns is replaced by a session switch mid-flight.
 		const turnSnapshot = this.turns;
 		this.inputEl.value = "";
+		this.pendingImages = [];
+		this.renderPendingImages();
 
 		// Mark session busy immediately — before any awaits — so the input is disabled and
 		// a second Send press cannot race with the in-progress request.
@@ -722,15 +1011,16 @@ export class ChatView extends ItemView {
 
 		// Read model directly from input element to catch values not yet flushed via change event.
 		const inputModel = this.modelInputEl.value.trim();
-		const sessionModel = session.model.trim();
-		const model = (inputModel.length > 0 ? inputModel : sessionModel) || settings.model;
+		const sessionModel = this.getSessionTextOverride(session, settings);
+		const model = inputModel || settings.model;
 
 		// Fire-and-forget housekeeping that runs before the loop but doesn't block the busy state.
 		if (isFirstMessage) {
-			await this.deps.sessionStore.rename(sessionId, text.slice(0, 60));
+			const titleText = text || images.map((image) => image.name).join(", ");
+			await this.deps.sessionStore.rename(sessionId, titleText.slice(0, 60));
 			this.refreshHeader();
 		}
-		if (inputModel.length > 0 && inputModel !== sessionModel) {
+		if (inputModel !== sessionModel) {
 			await this.deps.sessionStore.updateModel(sessionId, inputModel);
 		}
 
@@ -745,13 +1035,19 @@ export class ChatView extends ItemView {
 		for (const t of turnSnapshot) {
 			if (t === assistantTurn) continue;
 			if (t.role === "user") {
-				messages.push({ role: "user", content: t.content });
+				messages.push({ role: "user", content: oaMultimodalContent(t.content, t.images) });
 			} else if (t.role === "assistant") {
 				const assistantText = t.segments
 					.filter((s): s is { kind: "text"; text: string } => s.kind === "text")
 					.map((s) => s.text)
 					.join("");
-				if (assistantText.length > 0) messages.push({ role: "assistant", content: assistantText });
+				const generatedImages = t.generatedImages ?? [];
+				const content =
+					assistantText +
+					(generatedImages.length > 0
+						? `${assistantText ? "\n\n" : ""}Images shown in chat and available in the vault:\n${generatedImages.map((i) => `- ${i.path}`).join("\n")}`
+						: "");
+				if (content.length > 0) messages.push({ role: "assistant", content });
 			}
 		}
 
@@ -768,6 +1064,9 @@ export class ChatView extends ItemView {
 				systemPrompt: settings.systemPrompt,
 				tools: this.deps.tools,
 				consent: this.deps.consent,
+				resolveToolImages: (_name, result) => oaResolveToolImages(this.app, result),
+				getConversationImages: () => this.getConversationImages(turnSnapshot),
+				getImageModel: () => imageModel,
 			})) {
 				if (ev.kind === "thinking_text") {
 					assistantTurn.thinkingContent = (assistantTurn.thinkingContent ?? "") + ev.text;
@@ -787,6 +1086,20 @@ export class ChatView extends ItemView {
 					if (this.turns.includes(assistantTurn)) this.scheduleRender();
 					// Yield to the browser so it can repaint between token chunks.
 					await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+					continue;
+				} else if (ev.kind === "images") {
+					assistantTurn.thinking = false;
+					for (const url of ev.urls) {
+						try {
+							const image = await oaPersistInlineModelImage(this.app, url, text, model);
+							const list = assistantTurn.generatedImages ?? (assistantTurn.generatedImages = []);
+							if (!list.some((i) => i.path === image.path)) list.push(image);
+						} catch (err) {
+							assistantTurn.error = `Could not save model image: ${err instanceof Error ? err.message : String(err)}`;
+						}
+					}
+					await this.deps.sessionStore.updateTurns(sessionId, this.uiToStoredTurns(turnSnapshot));
+					if (this.turns.includes(assistantTurn)) this.scheduleRender();
 					continue;
 				} else if (ev.kind === "tool_call_started") {
 					assistantTurn.thinking = false;
@@ -810,9 +1123,42 @@ export class ChatView extends ItemView {
 						else if (ev.result.error.startsWith("ConsentDeniedError")) tc.status = "denied";
 						else tc.status = "error";
 					}
+					if (tc?.name === "image_generate" && ev.result.ok) {
+						const value = ev.result.value as {
+							path?: unknown;
+							prompt?: unknown;
+							model?: unknown;
+							referenceImageNames?: unknown;
+						} | null;
+						if (value && typeof value === "object" && typeof value.path === "string") {
+							const list = assistantTurn.generatedImages ?? (assistantTurn.generatedImages = []);
+							if (!list.some((i) => i.path === value.path)) {
+								list.push({
+									path: value.path,
+									prompt: typeof value.prompt === "string" ? value.prompt : "",
+									model: typeof value.model === "string" ? value.model : "",
+									referenceImageNames: Array.isArray(value.referenceImageNames)
+										? value.referenceImageNames
+										: [],
+								});
+							}
+							await this.deps.sessionStore.updateTurns(sessionId, this.uiToStoredTurns(turnSnapshot));
+						}
+					}
+					if (tc?.name === "vault_image" && ev.result.ok) {
+						const value = ev.result.value as { path?: unknown; displayInChat?: unknown } | null;
+						if (value && typeof value === "object" && value.displayInChat === true && typeof value.path === "string") {
+							const list = assistantTurn.generatedImages ?? (assistantTurn.generatedImages = []);
+							if (!list.some((i) => i.path === value.path)) {
+								list.push({ path: value.path, prompt: "", model: "", source: "vault" });
+							}
+							await this.deps.sessionStore.updateTurns(sessionId, this.uiToStoredTurns(turnSnapshot));
+						}
+					}
 					// Show thinking indicator while the model processes tool results.
-					assistantTurn.thinking = true;
-					assistantTurn.thinkingLabel = tc ? `Processing ${tc.name}…` : undefined;
+					assistantTurn.thinking = !(tc?.name === "image_generate" && !ev.result.ok);
+					assistantTurn.thinkingLabel =
+						assistantTurn.thinking && tc ? `Processing ${tc.name}…` : undefined;
 				} else if (ev.kind === "cap_hit") {
 					assistantTurn.capHit = true;
 				}
@@ -841,6 +1187,10 @@ export class ChatView extends ItemView {
 	}
 
 	private async handlePackSend(): Promise<void> {
+		if (this.pendingImages.length > 0) {
+			new Notice("Image attachments are available in Classic mode. Remove them or switch modes.");
+			return;
+		}
 		const text = this.inputEl.value.trim();
 		if (!text) return;
 		const pack = this.getActivePack();
@@ -1107,6 +1457,7 @@ export class ChatView extends ItemView {
 						const body = row.createEl("div", { cls: "open-agent-turn-body" });
 						body.setText(turn.content);
 					}
+					this.renderTurnImages(row, turn.images);
 				}
 			} else {
 				// Find preceding user turn index (needed for retry button)
@@ -1122,9 +1473,13 @@ export class ChatView extends ItemView {
 					const retryBtn = aHeaderRow.createEl("button", { text: "↺", cls: "open-agent-turn-edit-btn" });
 					retryBtn.setAttribute("aria-label", "Retry");
 					retryBtn.addEventListener("click", () => {
-						const retryText = this.turns[userTurnIdx].content;
+						const retryTurn = this.turns[userTurnIdx];
+						const retryText = retryTurn.content;
+						const retryImages = [...(retryTurn.images ?? [])];
 						this.turns = this.turns.slice(0, userTurnIdx);
 						this.inputEl.value = retryText;
+						this.pendingImages = retryImages;
+						this.renderPendingImages();
 						void this.handleSend();
 					});
 				}
@@ -1181,6 +1536,7 @@ export class ChatView extends ItemView {
 							if (record) this.renderToolCard(row, record);
 						}
 					}
+					this.renderGeneratedImages(row, turn.generatedImages);
 				}
 			}
 
@@ -1211,11 +1567,162 @@ export class ChatView extends ItemView {
 
 	private async submitEdit(turnIndex: number): Promise<void> {
 		const text = this.editingText.trim();
-		if (!text) return;
+		const images = [...(this.turns[turnIndex]?.images ?? [])];
+		if (!text && images.length === 0) return;
 		this.editingTurnIndex = null;
 		this.turns = this.turns.slice(0, turnIndex);
 		this.inputEl.value = text;
+		this.pendingImages = images;
+		this.renderPendingImages();
 		await this.handleSend();
+	}
+
+	// ─── Image attachments ────────────────────────────────────────────
+
+	private async addImageFiles(files: File[]): Promise<void> {
+		if (this.deps.sessionStore.getActive().selectedPackId) {
+			new Notice("Image attachments are available in Classic mode.");
+			return;
+		}
+		let total = this.pendingImages.reduce((sum, image) => sum + image.size, 0);
+		try {
+			for (const file of files) {
+				if (this.pendingImages.length >= OA_MAX_IMAGES) {
+					new Notice(`You can attach up to ${OA_MAX_IMAGES} images per message.`);
+					break;
+				}
+				if (file.size <= 0 || file.size > OA_MAX_IMAGE_BYTES) {
+					new Notice(`${file.name}: source image is too large (10 MB each, 64 MB converted total).`);
+					continue;
+				}
+				try {
+					const bytes = new Uint8Array(await file.arrayBuffer());
+					const mimeType = oaDetectImageMime(bytes);
+					if (!mimeType || !OA_IMAGE_MIMES.has(mimeType)) {
+						new Notice(`${file.name}: unsupported or invalid image. Use PNG, JPEG, WebP, or GIF.`);
+						continue;
+					}
+					const png = await oaDecodeImageToPng(bytes);
+					if (png.length <= 0 || total + png.length > OA_MAX_TOTAL_IMAGE_BYTES) {
+						new Notice(`${file.name}: converted PNG exceeds the 64 MB total image limit.`);
+						continue;
+					}
+					this.pendingImages.push({
+						id: crypto.randomUUID(),
+						name: file.name || "image",
+						mimeType: "image/png",
+						size: png.byteLength,
+						url: oaBytesToDataUrl(png, "image/png"),
+					});
+					total += png.byteLength;
+				} catch (error) {
+					new Notice(
+						`${file.name}: could not convert image to PNG${error instanceof Error ? ` (${error.message})` : ""}.`,
+					);
+				}
+			}
+		} finally {
+			this.renderPendingImages();
+			this.refreshBusyState();
+		}
+	}
+
+	private async normalizeConversationImagesToPng(images: PendingImage[]): Promise<PendingImage[]> {
+		const result: PendingImage[] = [];
+		let total = 0;
+		for (const image of images ?? []) {
+			if (result.length >= OA_MAX_IMAGES || total >= OA_MAX_TOTAL_IMAGE_BYTES) break;
+			if (typeof image?.url !== "string") break;
+			try {
+				const url = await oaImageUrlToPngDataUrl(image.url);
+				const size = Math.ceil((url.length * 3) / 4);
+				if (size <= 0 || total + size > OA_MAX_TOTAL_IMAGE_BYTES) continue;
+				result.push({ ...image, mimeType: "image/png", size, url });
+				total += size;
+			} catch {
+				// Skip images that cannot be normalized to PNG.
+			}
+		}
+		return result;
+	}
+
+	private renderPendingImages(): void {
+		if (!this.pendingImagesEl) return;
+		this.pendingImagesEl.empty();
+		for (const image of this.pendingImages) {
+			const chip = this.pendingImagesEl.createDiv({ cls: "open-agent-image-chip" });
+			chip.createEl("img", { cls: "open-agent-image-thumb", attr: { src: image.url, alt: image.name } });
+			chip.createEl("span", { cls: "open-agent-image-name", text: image.name });
+			const removeBtn = chip.createEl("button", { cls: "open-agent-image-remove", text: "×" });
+			removeBtn.setAttribute("aria-label", `Remove ${image.name}`);
+			removeBtn.addEventListener("click", () => {
+				this.pendingImages = this.pendingImages.filter((entry) => entry.id !== image.id);
+				this.renderPendingImages();
+			});
+		}
+		if (this.pendingImages.length > 0) {
+			this.pendingImagesEl.createDiv({
+				cls: "open-agent-image-hint",
+				text: "Sent only to vision-capable models.",
+			});
+		}
+	}
+
+	private renderTurnImages(container: HTMLElement, images?: PendingImage[]): void {
+		if (!images || images.length === 0) return;
+		const wrap = container.createDiv({ cls: "open-agent-turn-images" });
+		for (const image of images) {
+			wrap.createEl("img", {
+				cls: "open-agent-turn-image",
+				attr: { src: image.url, alt: image.name, title: image.name, loading: "lazy" },
+			});
+		}
+	}
+
+	private renderGeneratedImages(container: HTMLElement, images?: GeneratedImage[]): void {
+		if (!images || images.length === 0) return;
+		const wrap = container.createDiv({ cls: "open-agent-generated-images" });
+		for (const image of images) {
+			const card = wrap.createDiv({ cls: "open-agent-generated-image-card" });
+			const file = this.app.vault.getAbstractFileByPath(image.path);
+			if (file instanceof TFile) {
+				const img = card.createEl("img", {
+					cls: "open-agent-generated-image",
+					attr: {
+						src: this.app.vault.getResourcePath(file),
+						alt: image.path,
+						title: image.prompt || image.path,
+						loading: "lazy",
+					},
+				});
+				img.addEventListener("click", () => {
+					void this.app.workspace.getLeaf(false).openFile(file);
+				});
+			} else {
+				card.createEl("div", {
+					cls: "open-agent-generated-image-missing",
+					text: `Generated image not found: ${image.path}`,
+				});
+			}
+			const openBtn = card.createEl("button", {
+				cls: "open-agent-generated-image-open",
+				text: image.path,
+			});
+			openBtn.setAttribute("aria-label", `Open ${image.path}`);
+			openBtn.addEventListener("click", () => {
+				if (file instanceof TFile) void this.app.workspace.getLeaf(false).openFile(file);
+				else new Notice(`Not found: ${image.path}`);
+			});
+			if (image.model) {
+				card.createEl("div", { cls: "open-agent-generated-image-model", text: image.model });
+			}
+			if (image.referenceImageNames?.length) {
+				card.createEl("div", {
+					cls: "open-agent-generated-image-model",
+					text: `Edited from: ${image.referenceImageNames.join(", ")}`,
+				});
+			}
+		}
 	}
 
 	private renderToolCard(parent: HTMLElement, tc: ToolCallRecord): void {
@@ -1227,12 +1734,19 @@ export class ChatView extends ItemView {
 		if (tc.status === "awaiting-consent") cls.push("open-agent-tool-consent");
 
 		const card = parent.createEl("details", { cls: cls.join(" ") });
-		if (tc.status === "awaiting-consent") card.setAttribute("open", "");
+		if (tc.status === "awaiting-consent" || (tc.name === "image_generate" && tc.status === "error")) {
+			card.setAttribute("open", "");
+		}
+		if (tc.status === "running") card.setAttribute("aria-busy", "true");
 
 		const summary = card.createEl("summary", { cls: "open-agent-tool-summary" });
 		summary.createEl("span", { cls: "open-agent-tool-name", text: tc.name });
 		summary.createEl("span", { cls: "open-agent-tool-args", text: summarizeArgs(tc.args) });
-		summary.createEl("span", { cls: "open-agent-tool-status", text: statusLabel(tc.status) });
+		summary.createEl("span", {
+			cls: "open-agent-tool-status",
+			text: statusLabel(tc.status, tc.name),
+			attr: { role: "status", "aria-live": "polite" },
+		});
 
 		if (tc.status === "awaiting-consent") {
 			const diffArea = card.createDiv({ cls: "open-agent-consent-diff-area" });
@@ -1245,12 +1759,26 @@ export class ChatView extends ItemView {
 				diffArea.createEl("div", { cls: "open-agent-consent-computing", text: "(no preview)" });
 			}
 			const btns = card.createDiv({ cls: "open-agent-consent-inline-buttons" });
-			btns.createEl("button", { text: "Reject" })
-				.addEventListener("click", () => this.deps.consent.resolveConsent("reject" as ConsentChoice));
-			btns.createEl("button", { text: "Approve all this session" })
-				.addEventListener("click", () => this.deps.consent.resolveConsent("approve-session" as ConsentChoice));
-			btns.createEl("button", { text: "Approve", cls: "mod-cta" })
-				.addEventListener("click", () => this.deps.consent.resolveConsent("approve" as ConsentChoice));
+			const buttons: HTMLButtonElement[] = [];
+			const addButton = (label: string, cls?: string): HTMLButtonElement => {
+				const button = btns.createEl("button", { text: label, cls });
+				buttons.push(button);
+				return button;
+			};
+			let done = false;
+			const choose = (button: HTMLButtonElement, choice: ConsentChoice, label: string): void => {
+				button.addEventListener("click", () => {
+					if (done || tc.status !== "awaiting-consent") return;
+					done = true;
+					for (const other of buttons) other.disabled = true;
+					if (oaApplyConsentDecision(tc, choice)) button.setText(label);
+					this.deps.consent.resolveConsent(choice);
+					this.scheduleRender();
+				});
+			};
+			choose(addButton("Reject"), "reject", "Rejected");
+			choose(addButton("Approve all this session"), "approve-session", "Approved");
+			choose(addButton("Approve", "mod-cta"), "approve", "Approved");
 			return;
 		}
 
@@ -1287,6 +1815,115 @@ export class ChatView extends ItemView {
 					}
 				});
 			}
+		}
+
+		if (tc.name === "image_generate" && tc.status === "error") {
+			const retry = card.createEl("button", {
+				cls: "open-agent-tool-retry mod-cta",
+				text: "Retry",
+				attr: { "aria-label": "Retry image generation with the same payload" },
+			});
+			retry.addEventListener("click", () => {
+				void this.retryImageGenerate(tc);
+			});
+		}
+	}
+
+	// ─── Image retry (I8) ─────────────────────────────────────────
+
+	private async retryImageGenerate(tc: ToolCallRecord): Promise<void> {
+		const sessionId = this.deps.sessionStore.getActive().id;
+		if (!sessionId) return;
+		if (this.inFlights.has(sessionId) || tc.status !== "error" || tc.name !== "image_generate") return;
+		const tool = this.deps.tools.get("image_generate");
+		if (!tool) {
+			new Notice("Image generation tool is unavailable.");
+			return;
+		}
+		const owner = this.turns.find((turn) => turn.role === "assistant" && turn.toolCallMap[tc.id] === tc);
+		if (!owner) return;
+
+		const validated = validateArgs(tc.args, tool.schema);
+		if (!validated.ok) {
+			tc.result = { ok: false, error: `ToolArgError: ${validated.error}` };
+			tc.status = "error";
+			this.renderTranscript();
+			return;
+		}
+
+		tc.status = "running";
+		tc.result = undefined;
+		owner.thinking = true;
+		owner.thinkingLabel = "Retrying image_generate…";
+		const ctrl = new AbortController();
+		this.inFlights.set(sessionId, ctrl);
+		this.liveTurns.set(sessionId, this.turns);
+		this.refreshBusyState();
+		this.renderTranscript();
+
+		const settings = this.deps.getSettings();
+		const imageModel =
+			this.imageModelInputEl.value.trim() ||
+			(this.imageModelCatalog.length === 0 || this.imageModelCatalog.includes(settings.imageModel?.trim())
+				? settings.imageModel?.trim()
+				: "") ||
+			"";
+
+		try {
+			const result = await runWithTimeout(
+				tool.run(validated.value, {
+					signal: ctrl.signal,
+					getConversationImages: () => this.getConversationImages(this.turns),
+					getImageModel: () => imageModel,
+				}),
+				tool.timeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS,
+				tool.name,
+				ctrl.signal,
+			);
+			tc.result = result;
+			if (result.ok) {
+				tc.status = "ok";
+				const value = result.value as {
+					path?: unknown;
+					prompt?: unknown;
+					model?: unknown;
+					referenceImageNames?: unknown;
+				} | null;
+				if (value && typeof value === "object" && typeof value.path === "string") {
+					const list = owner.generatedImages ?? (owner.generatedImages = []);
+					if (!list.some((image) => image.path === value.path)) {
+						list.push({
+							path: value.path,
+							prompt: typeof value.prompt === "string" ? value.prompt : "",
+							model: typeof value.model === "string" ? value.model : "",
+							referenceImageNames: Array.isArray(value.referenceImageNames)
+								? value.referenceImageNames
+								: [],
+						});
+					}
+				}
+			} else if (result.error.startsWith("ConsentDeniedError")) {
+				tc.status = "denied";
+			} else {
+				tc.status = "error";
+			}
+		} catch (err) {
+			if (err instanceof ToolTimeoutError) {
+				tc.result = { ok: false, error: "ToolTimeoutError", details: err.message };
+			} else if (err instanceof Error) {
+				tc.result = { ok: false, error: err.name || "ToolError", details: err.message };
+			} else {
+				tc.result = { ok: false, error: "ToolError", details: String(err) };
+			}
+			tc.status = "error";
+		} finally {
+			owner.thinking = false;
+			owner.thinkingLabel = undefined;
+			this.inFlights.delete(sessionId);
+			this.liveTurns.delete(sessionId);
+			this.refreshBusyState();
+			this.renderTranscript();
+			await this.deps.sessionStore.updateTurns(sessionId, this.uiToStoredTurns(this.turns));
 		}
 	}
 
@@ -1814,10 +2451,21 @@ function shortValue(v: unknown): string {
 	return "{…}";
 }
 
-function statusLabel(s: ToolCallRecord["status"]): string {
+function oaApplyConsentDecision(record: ToolCallRecord, choice: ConsentChoice): boolean {
+	if (record.status !== "awaiting-consent") return false;
+	if (choice === "reject") {
+		record.status = "denied";
+	} else {
+		record.status = "running";
+		record.approvedPending = true;
+	}
+	return true;
+}
+
+function statusLabel(s: ToolCallRecord["status"], toolName?: string): string {
 	switch (s) {
 		case "running":
-			return "running…";
+			return toolName === "image_generate" ? "generating image…" : "running…";
 		case "awaiting-consent":
 			return "awaiting consent…";
 		case "ok":

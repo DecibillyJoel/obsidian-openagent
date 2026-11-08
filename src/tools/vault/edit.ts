@@ -1,4 +1,4 @@
-import { type App, TFile } from "obsidian";
+import { type App, TFile, TFolder } from "obsidian";
 import { type UndoBuffer } from "../../consent/undo";
 import { defineTool, fail, ok } from "../define";
 import { PathError, safeVaultPath } from "./path-safe";
@@ -14,18 +14,29 @@ export function editTool(app: App, undo: UndoBuffer) {
 	return defineTool<Args>({
 		name: "vault_edit",
 		description:
-			"Replace `oldString` with `newString` in a note. Counts matches first; rejects unless the actual count equals `occurrences` (default 1). Use a longer `oldString` (with surrounding context) to disambiguate.",
+			"Replace exact literal text in an EXISTING TEXT FILE. Folders are rejected. The edit is atomic: it counts exact, case-sensitive matches first and makes no change unless the count equals `occurrences` (default 1).",
 		category: "vault_write",
 		mutates: true,
 		schema: {
 			type: "object",
 			properties: {
-				path: { type: "string", description: "Vault-relative path" },
-				oldString: { type: "string", description: "Exact text to find. Include surrounding lines for uniqueness." },
-				newString: { type: "string", description: "Replacement text" },
+				path: {
+					type: "string",
+					description:
+						"Exact vault-relative path of an EXISTING TEXT FILE, including its extension such as `.md`.",
+				},
+				oldString: {
+					type: "string",
+					description:
+						"Exact, case-sensitive literal text to find. Include surrounding text or lines to make the match unique.",
+				},
+				newString: {
+					type: "string",
+					description: "Literal replacement text. Use an empty string to remove the matched text.",
+				},
 				occurrences: {
 					type: "integer",
-					description: "Expected match count (default 1). Edit is rejected if the actual count differs.",
+					description: "Required number of exact matches for the edit to proceed. Default: 1.",
 					minimum: 1,
 				},
 			},
@@ -40,6 +51,7 @@ export function editTool(app: App, undo: UndoBuffer) {
 				throw e;
 			}
 			const file = app.vault.getAbstractFileByPath(p);
+			if (file instanceof TFolder) return fail(`IsFolder: ${p}`);
 			if (!(file instanceof TFile)) return fail(`NotFound: ${p}`);
 
 			if (args.oldString.length === 0) return fail("oldString must be non-empty");
