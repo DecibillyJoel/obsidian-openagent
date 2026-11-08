@@ -136,6 +136,19 @@ export class OpenAgentSettingsTab extends PluginSettingTab {
 			"image",
 		);
 
+		new Setting(containerEl)
+			.setName("System prompt")
+			.setDesc("Optional. Prepended to every conversation.")
+			.addTextArea((txt) =>
+				txt
+					.setPlaceholder("You are a helpful assistant…")
+					.setValue(this.plugin.settings.systemPrompt)
+					.onChange(async (v) => {
+						this.plugin.settings.systemPrompt = v;
+						await this.plugin.saveSettings();
+					}),
+			);
+
 		new Setting(containerEl).setName("Model categories").setHeading();
 		renderModelCategoriesSection(containerEl, {
 			getCategories: () => this.plugin.settings.modelCategories,
@@ -151,19 +164,6 @@ export class OpenAgentSettingsTab extends PluginSettingTab {
 				for (const paint of this.modelSelectPainters) paint();
 			},
 		});
-
-		new Setting(containerEl)
-			.setName("System prompt")
-			.setDesc("Optional. Prepended to every conversation.")
-			.addTextArea((txt) =>
-				txt
-					.setPlaceholder("You are a helpful assistant…")
-					.setValue(this.plugin.settings.systemPrompt)
-					.onChange(async (v) => {
-						this.plugin.settings.systemPrompt = v;
-						await this.plugin.saveSettings();
-					}),
-			);
 
 		new Setting(containerEl).setName("Tool consent").setHeading();
 
