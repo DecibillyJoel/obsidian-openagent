@@ -296,11 +296,7 @@ export class OpenAgentSettingsTab extends PluginSettingTab {
 		const paint = (): void => {
 			if (!selectEl) return;
 			const current = getValue();
-			const allModels = oaCatalogWithCurrent(
-				catalog,
-				current,
-				kind === "image" ? () => true : (id) => oaModelEligibleOrUnknown(id, kind),
-			);
+			const allModels = oaCatalogWithCurrent(catalog, current, (id) => oaModelEligibleOrUnknown(id, kind));
 			const pseudo: ModelSelectPseudoOption[] = current
 				? [{ label: current, value: current }]
 				: [{ label: "— click Fetch to select —", value: "" }];

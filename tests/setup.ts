@@ -294,8 +294,20 @@ class MockPluginSettingTab {
 	}
 }
 
+export interface MockSettingControls {
+	select: MockElement;
+	buttonHandlers: Array<() => Promise<void>>;
+}
+
+/** One record per constructed Setting, in construction order. */
+export const settingControls: MockSettingControls[] = [];
+
 class MockSetting {
-	constructor(_containerEl: unknown) {}
+	private readonly controls: MockSettingControls = { select: new MockElement("select"), buttonHandlers: [] };
+
+	constructor(_containerEl: unknown) {
+		settingControls.push(this.controls);
+	}
 
 	setName(_value: string): this {
 		return this;
@@ -309,8 +321,9 @@ class MockSetting {
 		return this;
 	}
 
-	addDropdown(cb: (drop: { addOption(value: string, label: string): typeof drop; setValue(value: string): typeof drop; onChange(handler: (value: string) => void): typeof drop }) => void): this {
+	addDropdown(cb: (drop: { selectEl: MockElement; addOption(value: string, label: string): typeof drop; setValue(value: string): typeof drop; onChange(handler: (value: string) => void): typeof drop }) => void): this {
 		const drop = {
+			selectEl: this.controls.select,
 			addOption() {
 				return drop;
 			},
@@ -322,6 +335,24 @@ class MockSetting {
 			},
 		};
 		cb(drop);
+		return this;
+	}
+
+	addButton(cb: (btn: { setButtonText(value: string): typeof btn; setDisabled(value: boolean): typeof btn; onClick(handler: () => Promise<void>): typeof btn }) => void): this {
+		const controls = this.controls;
+		const btn = {
+			setButtonText() {
+				return btn;
+			},
+			setDisabled() {
+				return btn;
+			},
+			onClick(handler: () => Promise<void>) {
+				controls.buttonHandlers.push(handler);
+				return btn;
+			},
+		};
+		cb(btn);
 		return this;
 	}
 
