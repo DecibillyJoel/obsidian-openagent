@@ -62,6 +62,9 @@ export class MockElement {
 	tagName: string;
 	textContent = "";
 	value = "";
+	disabled = false;
+	checked = false;
+	attrs: Record<string, string> = {};
 	parentElement: MockElement | null = null;
 	children: MockElement[] = [];
 	classList = new MockClassList();
@@ -109,6 +112,7 @@ export class MockElement {
 	}
 
 	setAttribute(name: string, value: string): void {
+		this.attrs[name] = value;
 		if (name === "value") this.value = value;
 	}
 
@@ -118,10 +122,14 @@ export class MockElement {
 		this.listeners.set(type, listeners);
 	}
 
-	click(): void {
-		for (const listener of this.listeners.get("click") ?? []) {
+	fire(type: string): void {
+		for (const listener of this.listeners.get(type) ?? []) {
 			listener({ preventDefault() {}, target: this });
 		}
+	}
+
+	click(): void {
+		this.fire("click");
 	}
 
 	focus(): void {}
