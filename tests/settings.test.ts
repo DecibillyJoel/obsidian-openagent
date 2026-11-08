@@ -13,7 +13,7 @@ describe("model categories in settings", () => {
 			modelCategories: oaSanitizeModelCategories(undefined),
 		});
 		const first = build();
-		first.modelCategories.push({ id: "cat-1", name: "Favourites", models: ["a"] });
+		first.modelCategories.push({ id: "cat-1", name: "Favourites", kind: "text", models: ["a"] });
 		const second = build();
 		expect(first.modelCategories).not.toBe(second.modelCategories);
 		expect(second.modelCategories).toEqual([]);

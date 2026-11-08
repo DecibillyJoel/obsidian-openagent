@@ -4,9 +4,13 @@
  * This module imports nothing, so vitest covers it directly.
  */
 
+/** Which kind of model a category holds. */
+export type ModelCategoryKind = "text" | "image";
+
 export interface ModelCategory {
     id: string;
     name: string;
+    kind: ModelCategoryKind;
     models: string[];
 }
 
@@ -65,12 +69,13 @@ export function oaSanitizeModelCategories(raw: unknown): ModelCategory[] {
         if (typeof entry !== "object" || entry === null) {
             continue;
         }
-        const record = entry as { id?: unknown; name?: unknown; models?: unknown };
+        const record = entry as { id?: unknown; name?: unknown; kind?: unknown; models?: unknown };
         if (typeof record.name !== "string" || !Array.isArray(record.models)) {
             continue;
         }
         const id = typeof record.id === "string" && record.id ? record.id : oaNewModelCategoryId();
-        categories.push({ id, name: record.name, models: oaCleanMembers(record.models) });
+        const kind: ModelCategoryKind = record.kind === "image" ? "image" : "text";
+        categories.push({ id, name: record.name, kind, models: oaCleanMembers(record.models) });
     }
     return categories;
 }
@@ -78,17 +83,22 @@ export function oaSanitizeModelCategories(raw: unknown): ModelCategory[] {
 /**
  * The sections a model chooser shows, in paint order.
  *
- * A category appears only when this chooser's own catalog holds at least one
- * of its members, so a category built for another kind of model stays out. A
- * category never decides whether a model works: only the catalog does. The
- * full list comes last, and is left out when the catalog is empty.
+ * The kind gate comes first, so a category of the other kind never appears in
+ * this chooser, whatever the catalog holds. A category of the same kind then
+ * appears only when this chooser's own catalog holds at least one of its
+ * members. A category never decides whether a model works: only the catalog
+ * does. The full list comes last, and is left out when the catalog is empty.
  */
 export function oaBuildModelOptionGroups(
     catalog: string[],
     categories: ModelCategory[],
+    kind: ModelCategoryKind,
 ): ModelOptionGroup[] {
     const groups: ModelOptionGroup[] = [];
     for (const category of categories) {
+        if (category.kind !== kind) {
+            continue;
+        }
         if (category.name.trim() === "") {
             continue;
         }
