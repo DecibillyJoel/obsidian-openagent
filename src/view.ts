@@ -621,9 +621,13 @@ export class ChatView extends ItemView {
 		settings: PluginSettings = this.deps.getSettings(),
 	): void {
 		if (!this.imageModelInputEl) return;
-		// The image chooser keeps any stored id, as the settings dropdown does.
-		const selected = session.imageModel?.trim() ?? "";
-		const global = settings.imageModel?.trim() ?? "";
+		let selected = session.imageModel?.trim() ?? "";
+		let global = settings.imageModel?.trim() ?? "";
+		if (this.imageModelCatalog.length > 0) {
+			// Keep a stored model the fetch missed, the way the text chooser does.
+			if (!this.imageModelCatalog.includes(selected) && !oaModelEligibleOrUnknown(selected, "image")) selected = "";
+			if (!this.imageModelCatalog.includes(global) && !oaModelEligibleOrUnknown(global, "image")) global = "";
+		}
 		const pseudo: ModelSelectPseudoOption[] = [
 			{ label: global ? `Default: ${global}` : "Default: not configured", value: "" },
 		];
@@ -635,6 +639,15 @@ export class ChatView extends ItemView {
 			oaBuildModelOptionGroups(this.imageModelCatalog, settings.modelCategories, "image"),
 		);
 		this.imageModelInputEl.value = selected;
+	}
+
+	/**
+	 * The image model for a request: the session's own choice when it has one,
+	 * then the stored default. A fetch that missed the id does not drop it, the
+	 * way the text path keeps its own choice.
+	 */
+	private getImageModelForSend(settings: PluginSettings): string {
+		return this.imageModelInputEl.value.trim() || settings.imageModel?.trim() || "";
 	}
 
 	private async refreshPacks(): Promise<void> {
@@ -956,12 +969,7 @@ export class ChatView extends ItemView {
 
 		const session = this.deps.sessionStore.getActive();
 		const sessionId = session.id;
-		const imageModel =
-			this.imageModelInputEl.value.trim() ||
-			(this.imageModelCatalog.length === 0 || this.imageModelCatalog.includes(settings.imageModel?.trim())
-				? settings.imageModel?.trim()
-				: "") ||
-			"";
+		const imageModel = this.getImageModelForSend(settings);
 		const isFirstMessage = session.turns.length === 0 && session.title === "New chat";
 
 		this.turns.push({
@@ -1843,12 +1851,7 @@ export class ChatView extends ItemView {
 		this.renderTranscript();
 
 		const settings = this.deps.getSettings();
-		const imageModel =
-			this.imageModelInputEl.value.trim() ||
-			(this.imageModelCatalog.length === 0 || this.imageModelCatalog.includes(settings.imageModel?.trim())
-				? settings.imageModel?.trim()
-				: "") ||
-			"";
+		const imageModel = this.getImageModelForSend(settings);
 
 		try {
 			const result = await runWithTimeout(

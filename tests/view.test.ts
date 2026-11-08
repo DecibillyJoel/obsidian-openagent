@@ -1101,6 +1101,60 @@ describe("ChatView pack UI", () => {
 		expect(optionValuesOf(imageSelect)).toEqual(["", "gone-image", "img-a", "img-a"]);
 	});
 
+	it("still drops a stored image model the catalog knows cannot serve images", async () => {
+		const app = createMockApp();
+		const { deps } = createDeps({
+			id: "session-a",
+			model: "session-model",
+			imageModel: "text-only-id",
+			selectedPackId: null,
+			lastClassicModel: "session-model",
+		});
+		deps.getSettings = () => ({
+			...DEFAULT_SETTINGS,
+			baseUrl: "https://example.test/v1",
+			apiKey: "token",
+			imageModel: "img-only-id",
+		});
+		const view = new ChatView({ app } as never, deps);
+		const imageSelect = new MockElement("select");
+		Object.assign(view as unknown as Record<string, unknown>, { imageModelInputEl: imageSelect });
+		requestUrlMock.mockResolvedValue({
+			status: 200,
+			text: JSON.stringify({
+				data: [
+					{ id: "text-only-id", architecture: { output_modalities: ["text"] } },
+					{ id: "img-only-id", architecture: { output_modalities: ["image"] } },
+				],
+			}),
+		});
+		await (view as unknown as { populateModelDatalist(): Promise<void> }).populateModelDatalist();
+		(view as unknown as { refreshImageModelOptions(): void }).refreshImageModelOptions();
+		expect(imageSelect.value).toBe("");
+		expect(optionValuesOf(imageSelect)).toEqual(["", "img-only-id", "img-only-id"]);
+	});
+
+	it("uses the stored image default for a request when the catalog missed it", () => {
+		const app = createMockApp();
+		const { deps } = createDeps({
+			id: "session-a",
+			model: "session-model",
+			selectedPackId: null,
+			lastClassicModel: "session-model",
+		});
+		deps.getSettings = () => ({ ...DEFAULT_SETTINGS, apiKey: "token", imageModel: "gone-image" });
+		const view = new ChatView({ app } as never, deps);
+		const imageSelect = new MockElement("select");
+		Object.assign(view as unknown as Record<string, unknown>, {
+			imageModelInputEl: imageSelect,
+			imageModelCatalog: ["catalog-a"],
+		});
+		const resolve = (view as unknown as { getImageModelForSend(settings: unknown): string }).getImageModelForSend.bind(view);
+		expect(resolve(deps.getSettings())).toBe("gone-image");
+		imageSelect.value = "session-image";
+		expect(resolve(deps.getSettings())).toBe("session-image");
+	});
+
 	it("shows a category section above the full list and disables a missing member", () => {
 		const app = createMockApp();
 		const { deps } = createDeps({
