@@ -13,6 +13,7 @@ import { openAgentImageRegionTool } from "./tools/image-region";
 import { ensureParentFolder } from "./tools/vault/ensure-folder";
 import { CHAT_VIEW_TYPE, ChatView } from "./view";
 import { oaAnnotateTools } from "./images/geometry";
+import { oaSanitizeModelCategories } from "./models/categories";
 
 const SETTINGS_CHANGED_EVENT = "open-agent:settings-changed";
 
@@ -128,6 +129,7 @@ export default class OpenAgentPlugin extends Plugin {
 			...DEFAULT_SETTINGS,
 			...(data ?? {}),
 			consent: { ...DEFAULT_SETTINGS.consent, ...(data?.consent ?? {}) },
+			modelCategories: oaSanitizeModelCategories((data ?? {}).modelCategories),
 		};
 		const rawSessions = Array.isArray(data?.sessions)
 			? (data.sessions as (SessionMeta & { turns?: StoredTurn[] })[])

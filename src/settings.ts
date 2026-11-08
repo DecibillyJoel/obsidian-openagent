@@ -1,6 +1,7 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type OpenAgentPlugin from "./main";
 import { DEFAULT_CONSENT, type ConsentSettings } from "./consent/manager";
+import type { ModelCategory } from "./models/categories";
 import { loadPacks } from "./packs/loader";
 import type { AgentPack } from "./packs/types";
 import { oaFetchModelIds, oaModelEligibleOrUnknown } from "./provider";
@@ -18,6 +19,7 @@ export interface PluginSettings {
 	systemPrompt: string;
 	consent: ConsentSettings;
 	packProviderOverrides: Record<string, Record<string, Partial<OpenAICompatibleConfig>>>;
+	modelCategories: ModelCategory[];
 }
 
 export const DEFAULT_SETTINGS: PluginSettings = {
@@ -29,6 +31,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 	systemPrompt: "",
 	consent: { ...DEFAULT_CONSENT },
 	packProviderOverrides: {},
+	modelCategories: [],
 };
 
 export function isConfigured(s: PluginSettings): boolean {
