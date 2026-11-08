@@ -1,5 +1,5 @@
 import { oaFetchModelIds } from "../provider";
-import { oaNewModelCategoryId, type ModelCategory } from "./categories";
+import { oaNewModelCategoryId, type ModelCategory, type ModelCategoryKind } from "./categories";
 
 export interface ModelCategoriesSectionOptions {
 	getCategories(): ModelCategory[];
@@ -25,12 +25,15 @@ function oaCountLabel(count: number): string {
  *
  * Ownership: the section creates one child div of `container` and empties only
  * that child on every render. A sibling that is already in `container` stays.
+ *
+ * The section caches one catalog per kind, so the fetch of one category cannot
+ * relabel the rows of a category of the other kind.
  */
 export function renderModelCategoriesSection(
 	container: HTMLElement,
 	options: ModelCategoriesSectionOptions,
 ): void {
-	let catalog: string[] | null = null;
+	const catalogs: Record<ModelCategoryKind, string[] | null> = { text: null, image: null };
 	const noticeIds = new Set<string>();
 	const openIds = new Set<string>();
 	const root = container.createDiv({ cls: "open-agent-categories" });
@@ -85,16 +88,12 @@ export function renderModelCategoriesSection(
 			fetchButton.addEventListener("click", () => {
 				void (async () => {
 					const { baseUrl, apiKey } = options.getEndpoint();
-					const [textIds, imageIds] = await Promise.all([
-						oaFetchModelIds(baseUrl, apiKey, "text"),
-						oaFetchModelIds(baseUrl, apiKey, "image"),
-					]);
-					const union = [...new Set([...textIds, ...imageIds])].sort();
-					if (union.length === 0) {
-						catalog = null;
+					const fetched = await oaFetchModelIds(baseUrl, apiKey, category.kind);
+					if (fetched.length === 0) {
+						catalogs[category.kind] = null;
 						noticeIds.add(category.id);
 					} else {
-						catalog = union;
+						catalogs[category.kind] = fetched;
 						noticeIds.delete(category.id);
 					}
 					render();
@@ -117,6 +116,7 @@ export function renderModelCategoriesSection(
 			const list = body.createDiv({ cls: "open-agent-category-list" });
 			const rows = new Map<string, HTMLElement>();
 			const stored = category.models;
+			const catalog = catalogs[category.kind];
 			const listed =
 				catalog === null ? [...stored] : [...stored, ...catalog.filter((id) => !stored.includes(id))];
 			for (const id of listed) {
@@ -170,17 +170,26 @@ export function renderModelCategoriesSection(
 			});
 		}
 
-		const addButton = root.createEl("button", { cls: "open-agent-category-add", text: "Add category" });
-		addButton.addEventListener("click", () => {
-			void (async () => {
-				const created: ModelCategory = { id: oaNewModelCategoryId(), name: "", models: [] };
-				openIds.add(created.id);
-				await options.setCategories([...options.getCategories(), created]);
-				options.onChanged();
-				render();
-				titles.get(created.id)?.focus();
-			})();
-		});
+		const addButtons: Array<[ModelCategoryKind, string]> = [
+			["text", "Add text category"],
+			["image", "Add image category"],
+		];
+		for (const [kind, label] of addButtons) {
+			const addButton = root.createEl("button", {
+				cls: `open-agent-category-add-${kind}`,
+				text: label,
+			});
+			addButton.addEventListener("click", () => {
+				void (async () => {
+					const created: ModelCategory = { id: oaNewModelCategoryId(), name: "", kind, models: [] };
+					openIds.add(created.id);
+					await options.setCategories([...options.getCategories(), created]);
+					options.onChanged();
+					render();
+					titles.get(created.id)?.focus();
+				})();
+			});
+		}
 	};
 
 	render();

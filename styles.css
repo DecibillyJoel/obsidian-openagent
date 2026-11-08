@@ -1034,7 +1034,8 @@
 }
 
 .open-agent-category-fetch,
-.open-agent-category-add,
+.open-agent-category-add-text,
+.open-agent-category-add-image,
 .open-agent-category-remove {
 	align-self: flex-start;
 }

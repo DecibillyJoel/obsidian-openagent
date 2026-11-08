@@ -57,6 +57,16 @@ const TEXT_CATALOG = {
 	}),
 };
 
+const IMAGE_CATALOG = {
+	status: 200,
+	text: JSON.stringify({
+		data: [
+			{ id: "i1", architecture: { output_modalities: ["image"] } },
+			{ id: "i2", architecture: { output_modalities: ["image"] } },
+		],
+	}),
+};
+
 beforeEach(() => {
 	requestUrlMock.mockResolvedValue({
 		status: 200,
@@ -66,21 +76,21 @@ beforeEach(() => {
 
 describe("model categories section", () => {
 	it("renders the stored members before any fetch, marked available", () => {
-		const { container } = setup([{ id: "c1", name: "Favourites", models: ["a", "b"] }]);
+		const { container } = setup([{ id: "c1", name: "Favourites", kind: "text", models: ["a", "b"] }]);
 		expect(listIds(container)).toEqual(["a", "b"]);
 		expect(findByClass(container, "open-agent-model-option-unavailable")).toEqual([]);
 	});
 
 	it("lists a fetched id after the stored members, once", async () => {
 		requestUrlMock.mockResolvedValue(TEXT_CATALOG);
-		const { container } = setup([{ id: "c1", name: "Favourites", models: ["b"] }]);
+		const { container } = setup([{ id: "c1", name: "Favourites", kind: "text", models: ["b"] }]);
 		await clickFetch(container);
 		expect(listIds(container)).toEqual(["b", "a"]);
 	});
 
 	it("marks a stored id the fetch did not return as unavailable and keeps it checked", async () => {
 		requestUrlMock.mockResolvedValue(TEXT_CATALOG);
-		const { container } = setup([{ id: "c1", name: "Favourites", models: ["a", "gone"] }]);
+		const { container } = setup([{ id: "c1", name: "Favourites", kind: "text", models: ["a", "gone"] }]);
 		await clickFetch(container);
 		expect(listIds(container)).toEqual(["a", "gone", "b"]);
 		const goneRow = findByClass(container, "open-agent-category-row")[1];
@@ -90,7 +100,7 @@ describe("model categories section", () => {
 
 	it("adds a checked fetched id and saves", async () => {
 		requestUrlMock.mockResolvedValue(TEXT_CATALOG);
-		const { container, saves, changed } = setup([{ id: "c1", name: "Favourites", models: ["b"] }]);
+		const { container, saves, changed } = setup([{ id: "c1", name: "Favourites", kind: "text", models: ["b"] }]);
 		await clickFetch(container);
 		checkRow(container, "a").checked = true;
 		checkRow(container, "a").fire("change");
@@ -102,7 +112,7 @@ describe("model categories section", () => {
 
 	it("removes an unchecked stored id and saves", async () => {
 		requestUrlMock.mockResolvedValue(TEXT_CATALOG);
-		const { container, saves } = setup([{ id: "c1", name: "Favourites", models: ["a", "b"] }]);
+		const { container, saves } = setup([{ id: "c1", name: "Favourites", kind: "text", models: ["a", "b"] }]);
 		await clickFetch(container);
 		checkRow(container, "b").checked = false;
 		checkRow(container, "b").fire("change");
@@ -113,7 +123,7 @@ describe("model categories section", () => {
 
 	it("filters the rows", async () => {
 		requestUrlMock.mockResolvedValue(TEXT_CATALOG);
-		const { container } = setup([{ id: "c1", name: "Favourites", models: ["a", "b"] }]);
+		const { container } = setup([{ id: "c1", name: "Favourites", kind: "text", models: ["a", "b"] }]);
 		await clickFetch(container);
 		const filter = findByClass(container, "open-agent-category-filter")[0];
 		filter.value = "a";
@@ -123,7 +133,7 @@ describe("model categories section", () => {
 	});
 
 	it("keeps the stored members and shows a notice when the fetch is empty", async () => {
-		const { container } = setup([{ id: "c1", name: "Favourites", models: ["a", "b"] }]);
+		const { container } = setup([{ id: "c1", name: "Favourites", kind: "text", models: ["a", "b"] }]);
 		await clickFetch(container);
 		expect(listIds(container)).toEqual(["a", "b"]);
 		expect(findByClass(container, "open-agent-model-option-unavailable")).toEqual([]);
@@ -131,8 +141,8 @@ describe("model categories section", () => {
 	});
 
 	it("adds an empty category and saves it", async () => {
-		const { container, saves, changed } = setup([{ id: "c1", name: "Favourites", models: ["a"] }]);
-		findByClass(container, "open-agent-category-add")[0].click();
+		const { container, saves, changed } = setup([{ id: "c1", name: "Favourites", kind: "text", models: ["a"] }]);
+		findByClass(container, "open-agent-category-add-text")[0].click();
 		await flush();
 		expect(saves).toHaveLength(1);
 		expect(saves[0]).toHaveLength(2);
@@ -145,7 +155,7 @@ describe("model categories section", () => {
 	});
 
 	it("removes a category and saves", async () => {
-		const { container, saves } = setup([{ id: "c1", name: "Favourites", models: ["a"] }]);
+		const { container, saves } = setup([{ id: "c1", name: "Favourites", kind: "text", models: ["a"] }]);
 		findByClass(container, "open-agent-category-remove")[0].click();
 		await flush();
 		expect(saves).toHaveLength(1);
@@ -154,7 +164,7 @@ describe("model categories section", () => {
 	});
 
 	it("renames a category on change and shows Untitled category for a blank name", async () => {
-		const { container, saves } = setup([{ id: "c1", name: "Favourites", models: [] }]);
+		const { container, saves } = setup([{ id: "c1", name: "Favourites", kind: "text", models: [] }]);
 		const title = findByClass(container, "open-agent-category-title")[0];
 		title.value = "Fast";
 		title.fire("change");
@@ -173,8 +183,37 @@ describe("model categories section", () => {
 		const container = new MockElement("div");
 		const sibling = container.createDiv({ cls: "open-agent-existing-setting" });
 		sibling.setText("Grounded Research");
-		setup([{ id: "c1", name: "Favourites", models: [] }], container);
+		setup([{ id: "c1", name: "Favourites", kind: "text", models: [] }], container);
 		expect(container.children).toContain(sibling);
 		expect(sibling.textContent).toBe("Grounded Research");
+	});
+
+	it("creates a text category from the text button", async () => {
+		const { container, saves } = setup([]);
+		findByClass(container, "open-agent-category-add-text")[0].click();
+		await flush();
+		expect(saves[saves.length - 1][0].kind).toBe("text");
+	});
+
+	it("creates an image category from the image button", async () => {
+		const { container, saves } = setup([]);
+		findByClass(container, "open-agent-category-add-image")[0].click();
+		await flush();
+		expect(saves[saves.length - 1][0].kind).toBe("image");
+	});
+
+	it("renders no control that could change an existing kind", () => {
+		const { container } = setup([{ id: "a", name: "A", kind: "text", models: [] }]);
+		expect(findByClass(container, "open-agent-category-add-kind")).toEqual([]);
+		expect(findByClass(container, "open-agent-category-kind")).toEqual([]);
+	});
+
+	it("fetches only the kind of the category it belongs to", async () => {
+		requestUrlMock.mockClear();
+		requestUrlMock.mockResolvedValue(IMAGE_CATALOG);
+		const { container } = setup([{ id: "a", name: "A", kind: "image", models: [] }]);
+		await clickFetch(container);
+		const asked = requestUrlMock.mock.calls.map((call) => (call[0] as { url: string }).url);
+		expect(asked).toEqual(["https://example.test/v1/images/models"]);
 	});
 });
