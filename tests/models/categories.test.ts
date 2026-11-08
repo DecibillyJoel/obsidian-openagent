@@ -1,0 +1,115 @@
+import { describe, expect, it } from "vitest";
+import {
+    OA_ALL_MODELS_GROUP_LABEL,
+    oaBuildModelOptionGroups,
+    oaCatalogWithCurrent,
+    oaNewModelCategoryId,
+    oaSanitizeModelCategories,
+    type ModelCategory,
+} from "../../src/models/categories";
+
+describe("oaBuildModelOptionGroups", () => {
+    it("puts each category in stored order above the full list", () => {
+        const categories: ModelCategory[] = [
+            { id: "c1", name: "Favourites", models: ["b", "a"] },
+            { id: "c2", name: "Local", models: ["c"] },
+        ];
+        const groups = oaBuildModelOptionGroups(["a", "b", "c"], categories);
+        expect(groups.map((g) => g.label)).toEqual(["Favourites", "Local", OA_ALL_MODELS_GROUP_LABEL]);
+        expect(groups[0].options).toEqual([
+            { value: "b", available: true },
+            { value: "a", available: true },
+        ]);
+        expect(groups[2].options).toEqual([
+            { value: "a", available: true },
+            { value: "b", available: true },
+            { value: "c", available: true },
+        ]);
+    });
+
+    it("marks a member the catalog does not have as unavailable and keeps it", () => {
+        const groups = oaBuildModelOptionGroups(["a"], [{ id: "c1", name: "Mixed", models: ["a", "gone"] }]);
+        expect(groups[0].options).toEqual([
+            { value: "a", available: true },
+            { value: "gone", available: false },
+        ]);
+    });
+
+    it("skips a category with no available member in this catalog", () => {
+        const groups = oaBuildModelOptionGroups(["a"], [
+            { id: "c1", name: "Empty", models: [] },
+            { id: "c2", name: "Names", models: ["   "] },
+            { id: "c3", name: "   ", models: ["a"] },
+            { id: "c4", name: "Elsewhere", models: ["gone"] },
+        ]);
+        expect(groups.map((g) => g.label)).toEqual([OA_ALL_MODELS_GROUP_LABEL]);
+    });
+
+    it("emits nothing for an empty catalog", () => {
+        expect(oaBuildModelOptionGroups([], [{ id: "c1", name: "Old", models: ["gone"] }])).toEqual([]);
+        expect(oaBuildModelOptionGroups([], [])).toEqual([]);
+    });
+
+    it("keeps a current value the catalog dropped", () => {
+        expect(oaCatalogWithCurrent(["a"], "old", () => true)).toEqual(["old", "a"]);
+    });
+
+    it("leaves the catalog alone when it already holds the current value", () => {
+        expect(oaCatalogWithCurrent(["a", "b"], "a", () => true)).toEqual(["a", "b"]);
+    });
+
+    it("drops a current value the catalog dropped and the kind rejects", () => {
+        expect(oaCatalogWithCurrent(["a"], "old", () => false)).toEqual(["a"]);
+        expect(oaCatalogWithCurrent(["a"], "", () => true)).toEqual(["a"]);
+    });
+
+    it("de-duplicates a repeated member and drops blanks", () => {
+        const groups = oaBuildModelOptionGroups(["a"], [{ id: "c1", name: "Dup", models: ["a", "a", "", "a"] }]);
+        expect(groups[0].options).toEqual([{ value: "a", available: true }]);
+    });
+
+    it("does not mutate its inputs", () => {
+        const categories: ModelCategory[] = [{ id: "c1", name: "C", models: ["a"] }];
+        const catalog = ["a"];
+        oaBuildModelOptionGroups(catalog, categories);
+        expect(categories).toEqual([{ id: "c1", name: "C", models: ["a"] }]);
+        expect(catalog).toEqual(["a"]);
+    });
+});
+
+describe("oaSanitizeModelCategories", () => {
+    it("returns an empty list for every damaged shape", () => {
+        for (const raw of [undefined, null, "x", 42, {}, [], [1, "a", null]]) {
+            expect(oaSanitizeModelCategories(raw)).toEqual([]);
+        }
+    });
+
+    it("keeps good entries, repairs a missing id, and cleans members", () => {
+        const result = oaSanitizeModelCategories([
+            { id: "c1", name: "Keep", models: ["a", 2, "", "a"] },
+            { name: "No id", models: ["b"] },
+            { id: "c3", name: 7, models: ["b"] },
+            { id: "c4", name: "No models" },
+            { id: "c5", name: "Bad models", models: "b" },
+        ]);
+        expect(result).toHaveLength(2);
+        expect(result[0]).toEqual({ id: "c1", name: "Keep", models: ["a", "2"] });
+        expect(result[1].name).toBe("No id");
+        expect(result[1].id.length).toBeGreaterThan(0);
+        expect(result[1].models).toEqual(["b"]);
+    });
+
+    it("keeps an empty name, so a new category survives a reload", () => {
+        expect(oaSanitizeModelCategories([{ id: "c1", name: "", models: [] }])).toEqual([
+            { id: "c1", name: "", models: [] },
+        ]);
+    });
+});
+
+describe("oaNewModelCategoryId", () => {
+    it("returns a fresh non-empty id each call", () => {
+        const first = oaNewModelCategoryId();
+        expect(first.length).toBeGreaterThan(0);
+        expect(oaNewModelCategoryId()).not.toBe(first);
+    });
+});
