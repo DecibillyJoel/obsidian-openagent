@@ -12,3 +12,6 @@ hackathon/eval/results/*
 !hackathon/eval/results/.gitkeep
 .pi/
 hackathon/data/nobel_physics/.obsidian/
+
+# superpowers sdd workspace (scratch, never committed)
+.superpowers/
