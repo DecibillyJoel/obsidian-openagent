@@ -136,6 +136,22 @@ export class OpenAgentSettingsTab extends PluginSettingTab {
 			"image",
 		);
 
+		new Setting(containerEl).setName("Model categories").setHeading();
+		renderModelCategoriesSection(containerEl, {
+			getCategories: () => this.plugin.settings.modelCategories,
+			setCategories: async (next) => {
+				this.plugin.settings.modelCategories = next;
+				await this.plugin.saveSettings();
+			},
+			getEndpoint: () => ({
+				baseUrl: this.plugin.settings.baseUrl,
+				apiKey: this.plugin.settings.apiKey,
+			}),
+			onChanged: () => {
+				for (const paint of this.modelSelectPainters) paint();
+			},
+		});
+
 		new Setting(containerEl)
 			.setName("System prompt")
 			.setDesc("Optional. Prepended to every conversation.")
@@ -225,22 +241,6 @@ export class OpenAgentSettingsTab extends PluginSettingTab {
 				);
 			}
 		}
-
-		new Setting(containerEl).setName("Model categories").setHeading();
-		renderModelCategoriesSection(containerEl, {
-			getCategories: () => this.plugin.settings.modelCategories,
-			setCategories: async (next) => {
-				this.plugin.settings.modelCategories = next;
-				await this.plugin.saveSettings();
-			},
-			getEndpoint: () => ({
-				baseUrl: this.plugin.settings.baseUrl,
-				apiKey: this.plugin.settings.apiKey,
-			}),
-			onChanged: () => {
-				for (const paint of this.modelSelectPainters) paint();
-			},
-		});
 	}
 
 	private savePackProviderField(
