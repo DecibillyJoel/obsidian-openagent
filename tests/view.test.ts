@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import groundedResearchDefault from "../src/packs/defaults/grounded-research.json";
 import { DEFAULT_SETTINGS } from "../src/settings";
 import type { StoredPackTurnData } from "../src/sessions";
-import type { FinishReason } from "../src/types";
+import { AuthError, NetworkError, type FinishReason } from "../src/types";
 import { ChatView } from "../src/view";
 import {
 	MockElement,
@@ -1770,5 +1770,104 @@ describe("ChatView thoughts block", () => {
 		renderTranscriptOf(view);
 
 		expect(textTree(transcriptEl)).not.toContain(EMPTY_REPLY_LINE);
+	});
+});
+
+// ─── Provider error reporting ────────────────────────────────────────────────
+
+interface ErrorTurn {
+	role: "assistant";
+	content: string;
+	segments: never[];
+	toolCallMap: Record<string, never>;
+	thinking: boolean;
+	error?: string;
+	authError?: boolean;
+}
+
+const NETWORK_SENTENCE = "Network error. Check your connection or endpoint and retry.";
+
+function errorTurn(): ErrorTurn {
+	return { role: "assistant", content: "", segments: [], toolCallMap: {}, thinking: true };
+}
+
+function applyErrorToTurnOf(view: ChatView, turn: ErrorTurn, error: unknown): void {
+	(view as unknown as { applyErrorToTurn(t: ErrorTurn, e: unknown): void }).applyErrorToTurn(turn, error);
+}
+
+function formatPackRecoveryMessageOf(view: ChatView, packName: string, error: unknown): string {
+	return (view as unknown as { formatPackRecoveryMessage(p: string, e: unknown): string }).formatPackRecoveryMessage(packName, error);
+}
+
+describe("ChatView provider error reporting", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it("keeps the underlying network detail in the turn error", () => {
+		const { view } = createTranscriptView();
+		const turn = errorTurn();
+
+		applyErrorToTurnOf(view, turn, new NetworkError("connect ECONNREFUSED 127.0.0.1:11434"));
+
+		expect(turn.error).toBe(`${NETWORK_SENTENCE} (connect ECONNREFUSED 127.0.0.1:11434)`);
+		expect(turn.thinking).toBe(false);
+	});
+
+	it("keeps the plain sentence alone when there is no detail", () => {
+		const { view } = createTranscriptView();
+		const empty = errorTurn();
+		const defaulted = errorTurn();
+
+		applyErrorToTurnOf(view, empty, new NetworkError());
+		applyErrorToTurnOf(view, defaulted, new NetworkError("Network error"));
+
+		expect(empty.error).toBe(NETWORK_SENTENCE);
+		expect(defaulted.error).toBe(NETWORK_SENTENCE);
+	});
+
+	it("keeps the auth failure flagged and still carries the detail", () => {
+		const { view } = createTranscriptView();
+		const turn = errorTurn();
+
+		applyErrorToTurnOf(view, turn, new AuthError("HTTP 401"));
+
+		expect(turn.authError).toBe(true);
+		expect(turn.error).toBe("Authentication failed — check your API key. (HTTP 401)");
+		expect(turn.thinking).toBe(false);
+	});
+
+	it("carries the underlying detail in a pack recovery message", () => {
+		const { view } = createTranscriptView();
+
+		const network = formatPackRecoveryMessageOf(view, "Researcher", new NetworkError("connect ECONNREFUSED"));
+		const auth = formatPackRecoveryMessageOf(view, "Researcher", new AuthError("HTTP 401"));
+
+		expect(network.startsWith("Researcher couldn’t reach its provider.")).toBe(true);
+		expect(network.endsWith("(connect ECONNREFUSED)")).toBe(true);
+		expect(auth.startsWith("Researcher couldn’t authenticate.")).toBe(true);
+		expect(auth.endsWith("(HTTP 401)")).toBe(true);
+	});
+
+	it("never puts the API key in the message or the log", async () => {
+		vi.stubGlobal("window", oaWindowShim());
+		const apiKey = "sk-live-sk-test-1234567890abcdef";
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+		const { view, inputEl } = createSendView();
+		(view as unknown as { deps: ViewDeps }).deps.getSettings = () => ({ ...DEFAULT_SETTINGS, apiKey });
+		fetchMock.mockRejectedValue(new Error(`socket hang up for Bearer ${apiKey}`));
+		requestUrlMock.mockRejectedValue(new Error(`connect ECONNREFUSED while sending ${apiKey}`));
+		vi.stubGlobal("fetch", fetchMock);
+
+		inputEl.value = "hello";
+		await (view as unknown as { handleSend(): Promise<void> }).handleSend();
+
+		const turns = (view as unknown as { turns: ErrorTurn[] }).turns;
+		const error = turns[turns.length - 1]?.error ?? "";
+		expect(error).toContain("connect ECONNREFUSED");
+		expect(error).not.toContain(apiKey);
+		expect(errorSpy).toHaveBeenCalled();
+		expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(apiKey);
+		errorSpy.mockRestore();
 	});
 });

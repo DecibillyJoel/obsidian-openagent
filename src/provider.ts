@@ -114,7 +114,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
 			}
 		} catch (err) {
 			if (isAbortError(err) || opts.signal?.aborted) return;
-			throw new NetworkError(redactNetworkError(err));
+			const message = redactNetworkError(err, [this.config.apiKey]);
+			console.error("[open-agent] completion request failed", message);
+			throw new NetworkError(message);
 		}
 
 		if (opts.signal?.aborted) return;
@@ -235,9 +237,14 @@ function parseAssembled(buf: ToolCallBuffer): AssembledToolCall {
 	return { id: buf.id, name: buf.name, arguments: parsed, rawArguments: buf.args };
 }
 
-function redactNetworkError(err: unknown): string {
-	if (err instanceof Error) return err.message.replace(/Bearer [^\s]+/g, "Bearer ***");
-	return "Network error";
+export function redactNetworkError(err: unknown, secrets: readonly string[] = []): string {
+	if (!(err instanceof Error)) return "Network error";
+	let message = err.message.replace(/Bearer [^\s]+/g, "Bearer ***");
+	for (const secret of secrets) {
+		if (secret.length < 8) continue;
+		message = message.split(secret).join("***");
+	}
+	return message;
 }
 
 function shouldRetryWithoutResponseFormat(status: number, text: string): boolean {

@@ -1345,7 +1345,7 @@ export class ChatView extends ItemView {
 	private applyErrorToTurn(turn: UiTurn, err: unknown): void {
 		turn.thinking = false;
 		if (err instanceof AuthError) {
-			turn.error = "Authentication failed — check your API key.";
+			turn.error = withProviderDetail("Authentication failed — check your API key.", err.message);
 			turn.authError = true;
 			return;
 		}
@@ -1354,7 +1354,7 @@ export class ChatView extends ItemView {
 			return;
 		}
 		if (err instanceof NetworkError) {
-			turn.error = "Network error. Check your connection or endpoint and retry.";
+			turn.error = withProviderDetail("Network error. Check your connection or endpoint and retry.", err.message);
 			return;
 		}
 		if (err instanceof ProviderError) {
@@ -1384,13 +1384,19 @@ export class ChatView extends ItemView {
 			return `${packName} couldn’t start. Check the pack’s provider and model settings, then retry or switch to Classic mode. (${error.message})`;
 		}
 		if (error instanceof AuthError) {
-			return `${packName} couldn’t authenticate. Check the pack’s API key, then retry or switch to Classic mode.`;
+			return withProviderDetail(
+				`${packName} couldn’t authenticate. Check the pack’s API key, then retry or switch to Classic mode.`,
+				error.message,
+			);
 		}
 		if (error instanceof RateLimitError) {
 			return `${packName} hit the provider rate limit. Wait a moment, then retry or switch to Classic mode.`;
 		}
 		if (error instanceof NetworkError) {
-			return `${packName} couldn’t reach its provider. Check the endpoint or local model server, then retry or switch to Classic mode.`;
+			return withProviderDetail(
+				`${packName} couldn’t reach its provider. Check the endpoint or local model server, then retry or switch to Classic mode.`,
+				error.message,
+			);
 		}
 		if (error instanceof ProviderError) {
 			return `${packName} failed in the provider. Check the pack’s endpoint or model settings, then retry or switch to Classic mode. (${error.message})`;
@@ -2466,6 +2472,12 @@ export class ChatView extends ItemView {
 		}
 		return [];
 	}
+}
+
+function withProviderDetail(sentence: string, detail: string): string {
+	const trimmed = detail.trim();
+	if (trimmed.length === 0 || trimmed === "Network error") return sentence;
+	return `${sentence} (${trimmed})`;
 }
 
 function summarizeArgs(args: unknown): string {

@@ -13,6 +13,7 @@ import {
 	oaFetchModelIds,
 	oaModelEligibleOrUnknown,
 	OpenAICompatibleProvider,
+	redactNetworkError,
 } from "../src/provider";
 import { NetworkError, type ChatMessage, type ModelProvider, type StreamEvent } from "../src/types";
 import { oaSseResponse } from "./setup";
@@ -546,5 +547,60 @@ describe("streaming transport", () => {
 		expect(seenSignal?.aborted).toBe(true);
 		expect(events).toEqual([{ kind: "text", text: "par" }]);
 		expect(requestUrlMock).not.toHaveBeenCalled();
+	});
+});
+
+describe("provider failure reporting", () => {
+	const API_KEY = "sk-live-sk-test-1234567890abcdef";
+
+	function makeKeyedProvider(): ModelProvider {
+		return new OpenAICompatibleProvider({
+			baseUrl: "https://api.example.test/v1",
+			apiKey: API_KEY,
+			model: "test-model",
+		});
+	}
+
+	beforeEach(() => {
+		requestUrlMock.mockReset();
+		globalThis.fetch = vi.fn(async () => {
+			throw new Error(`socket hang up for Bearer ${API_KEY}`);
+		}) as unknown as typeof fetch;
+	});
+
+	it("redacts a bearer token and a supplied secret", () => {
+		expect(redactNetworkError(new Error(`Bearer ${API_KEY} rejected for ${API_KEY}`), [API_KEY])).toBe(
+			"Bearer *** rejected for ***",
+		);
+	});
+
+	it("leaves a short secret alone", () => {
+		expect(redactNetworkError(new Error("code abc"), ["abc"])).toBe("code abc");
+	});
+
+	it("falls back to the default message when the failure is not an Error", () => {
+		expect(redactNetworkError("boom", [API_KEY])).toBe("Network error");
+	});
+
+	it("logs the provider failure once", async () => {
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+		requestUrlMock.mockRejectedValue(new Error("connect ECONNREFUSED"));
+
+		await expect(collectEvents(makeKeyedProvider(), makeMessages())).rejects.toThrow(NetworkError);
+
+		expect(errorSpy).toHaveBeenCalledTimes(1);
+		errorSpy.mockRestore();
+	});
+
+	it("never puts the API key in the message or the log", async () => {
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+		requestUrlMock.mockRejectedValue(new Error(`connect ECONNREFUSED for Bearer ${API_KEY}`));
+
+		const failure = await collectEvents(makeKeyedProvider(), makeMessages()).catch((err: unknown) => err);
+
+		expect(failure).toBeInstanceOf(NetworkError);
+		expect((failure as Error).message).not.toContain(API_KEY);
+		expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(API_KEY);
+		errorSpy.mockRestore();
 	});
 });
