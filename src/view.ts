@@ -287,7 +287,12 @@ export class ChatView extends ItemView {
 		this.pendingImagesEl = composer.createDiv({ cls: "open-agent-image-previews" });
 		this.inputEl = composer.createEl("textarea", {
 			cls: "open-agent-input",
-			attr: { rows: "3", placeholder: "Ask the agent…" },
+			attr: {
+				rows: "3",
+				placeholder: "Ask the agent…",
+				enterkeyhint: "enter",
+				autocapitalize: "sentences",
+			},
 		});
 		this.imageInputEl = composer.createEl("input", {
 			cls: "open-agent-image-input",

@@ -1773,6 +1773,39 @@ describe("ChatView thoughts block", () => {
 	});
 });
 
+// ─── Composer ───────────────────────────────────────────────────────────────
+
+/** Build the composer through the real open path and return its textarea. */
+async function openComposerOf(): Promise<MockElement> {
+	const { view } = createTranscriptView();
+	const internals = view as unknown as {
+		populateModelDatalist(): Promise<void>;
+		refreshPacks(): Promise<void>;
+		contentEl: MockElement;
+	};
+	internals.populateModelDatalist = async () => undefined;
+	internals.refreshPacks = async () => undefined;
+	vi.stubGlobal("window", { ...oaWindowShim(), addEventListener: (): void => undefined });
+	await view.onOpen();
+
+	const inputEl = findByClass(internals.contentEl, "open-agent-input")[0];
+	if (!inputEl) throw new Error("the composer textarea is missing");
+	return inputEl;
+}
+
+describe("ChatView composer", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it("hints the mobile keyboard on the composer", async () => {
+		const composerEl = await openComposerOf();
+
+		expect(composerEl.attrs.enterkeyhint).toBe("enter");
+		expect(composerEl.attrs.autocapitalize).toBe("sentences");
+	});
+});
+
 // ─── Provider error reporting ────────────────────────────────────────────────
 
 interface ErrorTurn {

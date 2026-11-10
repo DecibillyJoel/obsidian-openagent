@@ -111,6 +111,9 @@
 	display: inline-flex;
 	align-items: center;
 	gap: 0.3rem;
+	min-height: 44px;
+	min-width: 44px;
+	white-space: nowrap;
 	background: none;
 	border: none;
 	padding: 0;
