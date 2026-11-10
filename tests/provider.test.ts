@@ -94,6 +94,20 @@ describe("OpenAICompatibleProvider", () => {
 		]);
 	});
 
+	it("reads the reasoning field from a non-streaming reply", async () => {
+		requestUrlMock.mockResolvedValue({
+			status: 200,
+			text: JSON.stringify({
+				choices: [{ message: { content: "391", reasoning: "17 * 23 = 391" }, finish_reason: "stop" }],
+			}),
+		});
+		expect(await collectEvents(makeProvider(), makeMessages())).toEqual([
+			{ kind: "thinking_text", text: "17 * 23 = 391" },
+			{ kind: "text", text: "391" },
+			{ kind: "done", finishReason: "stop" },
+		]);
+	});
+
 	it("includes response_format when provided", async () => {
 		requestUrlMock.mockResolvedValue({
 			status: 200,

@@ -13,7 +13,7 @@ import {
 } from "./types";
 import type { OpenAICompatibleConfig } from "./provider-config";
 import { oaStreamChatDeltas } from "./streaming/chat-stream";
-import { oaReasoningDetailText } from "./streaming/reasoning";
+import { oaReasoningDetailText, oaSplitThinking } from "./streaming/reasoning";
 
 interface ToolCallBuffer {
 	id: string;
@@ -126,8 +126,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
 		const choice = parseChatCompletionChoice(responseText);
 		if (!choice) throw new ProviderError("Malformed response from completion endpoint");
 
-		const rawText = extractMessageText(choice.message?.content);
-		const { text, thinking } = extractThinking(choice.message?.reasoning_content, rawText);
+		const { text, thinking } = extractThinking(choice.message);
 		if (thinking.length > 0) {
 			yield { kind: "thinking_text", text: thinking };
 		}
@@ -248,7 +247,14 @@ function shouldRetryWithoutResponseFormat(status: number, text: string): boolean
 }
 
 function parseChatCompletionChoice(responseText: string): {
-	message?: { content?: unknown; tool_calls?: unknown; reasoning_content?: unknown; images?: unknown };
+	message?: {
+		content?: unknown;
+		tool_calls?: unknown;
+		reasoning?: unknown;
+		reasoning_content?: unknown;
+		reasoning_details?: unknown;
+		images?: unknown;
+	};
 	finish_reason?: string | null;
 } | null {
 	const parsed = parseJsonResponse(responseText);
@@ -260,7 +266,9 @@ function parseChatCompletionChoice(responseText: string): {
 			? {
 				content: choice.message.content,
 				tool_calls: choice.message.tool_calls,
+				reasoning: choice.message.reasoning,
 				reasoning_content: choice.message.reasoning_content,
+				reasoning_details: choice.message.reasoning_details,
 				images: choice.message.images,
 			}
 			: undefined,
@@ -283,23 +291,20 @@ function stripEosTokens(text: string): string {
 }
 
 function extractThinking(
-	reasoningContent: unknown,
-	rawText: string,
+	message: {
+		content?: unknown;
+		reasoning?: unknown;
+		reasoning_content?: unknown;
+		reasoning_details?: unknown;
+	} | undefined,
 ): { text: string; thinking: string } {
-	// Prefer an explicit reasoning_content field (DeepSeek-R1, etc.)
-	if (typeof reasoningContent === "string" && reasoningContent.trim().length > 0) {
-		return { text: stripEosTokens(rawText), thinking: reasoningContent.trim() };
-	}
-
-	// Fall back to stripping <think>...</think> from the text content
-	const thinkMatch = rawText.match(/^<think>([\s\S]*?)<\/think>\s*/);
-	if (thinkMatch) {
-		const thinking = thinkMatch[1].trim();
-		const remainder = rawText.slice(thinkMatch[0].length);
-		return { text: stripEosTokens(remainder), thinking };
-	}
-
-	return { text: stripEosTokens(rawText), thinking: "" };
+	const split = oaSplitThinking({
+		content: extractMessageText(message?.content),
+		reasoning: message?.reasoning,
+		reasoning_content: message?.reasoning_content,
+		reasoning_details: message?.reasoning_details,
+	});
+	return { text: stripEosTokens(split.text), thinking: split.thinking };
 }
 
 function parseCompletionToolCalls(value: unknown): AssembledToolCall[] {
