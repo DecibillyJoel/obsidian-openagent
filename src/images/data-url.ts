@@ -2,6 +2,13 @@ const DATA_URL_CHUNK_BYTES = 32768;
 const DATA_URL_DECODE_MAX_BYTES = 96 * 1024 * 1024;
 const dataUrlCharCodes = new Uint16Array(DATA_URL_CHUNK_BYTES);
 
+export function oaDataUrlLength(byteLength: number, mime: string): number {
+	// Base64 of n bytes is exactly Math.ceil(n / 3) * 4 characters.
+	// The sum below equals oaBufferToDataUrl(...).length, so a caller can
+	// reject before encoding without changing which payloads pass.
+	return `data:${mime};base64,`.length + Math.ceil(byteLength / 3) * 4;
+}
+
 export function oaBufferToDataUrl(buf: Uint8Array | ArrayBuffer, mime: string): string {
 	const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
 	let binary = "";

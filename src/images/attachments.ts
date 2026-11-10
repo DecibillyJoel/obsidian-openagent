@@ -7,6 +7,7 @@ import {
 	OA_MAX_PNG_BYTES,
 	OA_MAX_TOTAL_IMAGE_BYTES,
 } from "./constants";
+import { oaDataUrlLength } from "./data-url";
 import {
 	oaBytesToDataUrl,
 	oaDecodeImageToPng,
@@ -23,6 +24,10 @@ export {
 } from "./constants";
 
 export const OA_MAX_DATA_URL_BYTES = 24 * 1024 * 1024;
+// This cap measures base64 text length, not raw PNG bytes.
+// 24 MiB of base64 text holds about 18 MiB of PNG bytes.
+// That is about a third less than the 64 MiB in OA_MAX_PNG_BYTES.
+// Raising either constant alone does not raise the effective per-image limit.
 
 export interface PendingImage {
 	id: string;
@@ -174,8 +179,8 @@ export async function oaResolveToolImages(app: App, ctx: unknown): Promise<Pendi
 				continue;
 			}
 			const pngSize = Math.ceil((url.length * 3) / 4);
-			if (total + pngSize > OA_MAX_TOTAL_IMAGE_BYTES) continue;
 			if (url.length > OA_MAX_DATA_URL_BYTES) continue;
+			if (total + pngSize > OA_MAX_TOTAL_IMAGE_BYTES) continue;
 			seen.add(target);
 			images.push({
 				id: crypto.randomUUID(),
@@ -209,9 +214,9 @@ export async function oaResolveToolImages(app: App, ctx: unknown): Promise<Pendi
 		} catch {
 			continue;
 		}
+		if (oaDataUrlLength(png.byteLength, "image/png") > OA_MAX_DATA_URL_BYTES) continue;
 		if (total + png.byteLength > OA_MAX_TOTAL_IMAGE_BYTES) continue;
 		const url = oaBytesToDataUrl(png, "image/png");
-		if (url.length > OA_MAX_DATA_URL_BYTES) continue;
 		seen.add(file.path);
 		images.push({
 			id: crypto.randomUUID(),

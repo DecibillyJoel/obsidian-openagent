@@ -374,6 +374,35 @@ describe("oaResolveToolImages", () => {
 		expect(images).toEqual([]);
 	});
 
+	it("rejects an over-limit PNG before the base64 encode", async () => {
+		const prefix = "data:image/png;base64,";
+		const ceilingBytes = Math.floor((OA_MAX_DATA_URL_BYTES - prefix.length) / 4) * 3;
+		const fits = new Uint8Array(ceilingBytes);
+		const over = new Uint8Array(ceilingBytes + 1);
+		const links = ["![[Attachments/a.jpg]]"];
+
+		stubPngConversion(fits);
+		const keepApp = makeApp(JPEG_BYTES, JPEG_BYTES.length, "Attachments/a.jpg");
+		const kept = await oaResolveToolImages(keepApp as never, {
+			ok: true,
+			value: { path: "Notes/source.md", links },
+		});
+		expect(kept).toHaveLength(1);
+		expect(kept[0]?.url.length).toBe(prefix.length + (ceilingBytes / 3) * 4);
+		expect(kept[0]?.url.length).toBeLessThanOrEqual(OA_MAX_DATA_URL_BYTES);
+
+		const btoaSpy = vi.spyOn(globalThis, "btoa");
+		stubPngConversion(over);
+		const dropApp = makeApp(JPEG_BYTES, JPEG_BYTES.length, "Attachments/a.jpg");
+		const dropped = await oaResolveToolImages(dropApp as never, {
+			ok: true,
+			value: { path: "Notes/source.md", links },
+		});
+		expect(dropped).toEqual([]);
+		expect(btoaSpy).not.toHaveBeenCalled();
+		btoaSpy.mockRestore();
+	});
+
 	it("drops a converted image whose data URL exceeds the per-image payload limit", async () => {
 		const oversized = new Uint8Array(Math.ceil((OA_MAX_DATA_URL_BYTES * 3) / 4) + 3);
 		oversized.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
