@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import groundedResearchDefault from "../src/packs/defaults/grounded-research.json";
 import { DEFAULT_SETTINGS } from "../src/settings";
 import type { StoredPackTurnData } from "../src/sessions";
@@ -9,6 +9,7 @@ import {
 	MockTFile,
 	NoticeMock,
 	createMockApp,
+	fetchMock,
 	requestUrlMock,
 	setMobileMode,
 } from "./setup";
@@ -1280,5 +1281,276 @@ describe("ChatView pack UI", () => {
 
 		deps.getSettings = () => ({ ...DEFAULT_SETTINGS, apiKey: "token", model: "legacy-model" });
 		expect(override()).toBe("");
+	});
+});
+
+// ─── Streamed text rendering ─────────────────────────────────────────────────
+
+type ViewDeps = ConstructorParameters<typeof ChatView>[1];
+
+/** Browser timer surface that the view touches while a send is in flight. */
+function oaWindowShim(): {
+	setTimeout: (callback: () => void, ms?: number) => number;
+	clearTimeout: (handle: number) => void;
+} {
+	return {
+		setTimeout: (callback, ms) => globalThis.setTimeout(callback, ms) as unknown as number,
+		clearTimeout: (handle) => globalThis.clearTimeout(handle),
+	};
+}
+
+/** One SSE record per pull, so the test can inspect the transcript between deltas. */
+function oaDeltaStream(deltas: string[], opts: { delayMs?: number; onPull?: () => void } = {}): unknown {
+	const encoder = new TextEncoder();
+	const records = deltas.map((delta) =>
+		encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: delta } }] })}\n\n`),
+	);
+	records.push(encoder.encode("data: [DONE]\n\n"));
+	let index = 0;
+	const body = new ReadableStream<Uint8Array>({
+		async pull(controller) {
+			opts.onPull?.();
+			if (opts.delayMs) await new Promise<void>((resolve) => globalThis.setTimeout(resolve, opts.delayMs));
+			if (index >= records.length) {
+				controller.close();
+				return;
+			}
+			controller.enqueue(records[index]);
+			index += 1;
+		},
+	});
+	return {
+		ok: true,
+		status: 200,
+		headers: { get: (name: string) => (name.toLowerCase() === "content-type" ? "text/event-stream" : null) },
+		body,
+		text: async () => "",
+	};
+}
+
+function createTranscriptView(): { view: ChatView; transcriptEl: MockElement; deps: ViewDeps } {
+	const app = createMockApp();
+	const { deps } = createDeps({
+		id: "session-a",
+		model: "gpt-4o-mini",
+		selectedPackId: null,
+		lastClassicModel: "gpt-4o-mini",
+	});
+	const view = new ChatView({ app } as never, deps);
+	const transcriptEl = new MockElement("div");
+	Object.assign(view as unknown as Record<string, unknown>, { transcriptEl });
+	return { view, transcriptEl, deps };
+}
+
+function renderTranscriptOf(view: ChatView): void {
+	(view as unknown as { renderTranscript(): void }).renderTranscript();
+}
+
+interface AppendTurn {
+	role: "assistant";
+	content: string;
+	segments: Array<{ kind: "text"; text: string }>;
+	toolCallMap: Record<string, never>;
+	thinking: boolean;
+	generatedImages: never[];
+}
+
+interface AppendSegment {
+	kind: "text";
+	text: string;
+}
+
+function appendStreamedTextOf(view: ChatView, turn: AppendTurn): void {
+	(view as unknown as { appendStreamedText(turn: AppendTurn): void }).appendStreamedText(turn);
+}
+
+/** A busy streamed turn whose body element is already cached, so appends take the in-place path. */
+function createAppendingView(text: string): {
+	view: ChatView;
+	transcriptEl: MockElement;
+	turn: AppendTurn;
+	segment: AppendSegment;
+} {
+	const { view, transcriptEl } = createTranscriptView();
+	const segment: AppendSegment = { kind: "text", text };
+	const turn: AppendTurn = {
+		role: "assistant",
+		content: text,
+		segments: [segment],
+		toolCallMap: {},
+		thinking: false,
+		generatedImages: [],
+	};
+	Object.assign(view as unknown as Record<string, unknown>, { turns: [turn] });
+	(view as unknown as { inFlights: Map<string, AbortController> }).inFlights.set("session-a", new AbortController());
+	renderTranscriptOf(view);
+	return { view, transcriptEl, turn, segment };
+}
+
+function appendDelta(view: ChatView, turn: AppendTurn, segment: AppendSegment, text: string): void {
+	segment.text = text;
+	turn.content = text;
+	appendStreamedTextOf(view, turn);
+}
+
+/** A view wired with every element the classic send path touches. */
+function createSendView(): { view: ChatView; transcriptEl: MockElement; inputEl: MockElement } {
+	const { view, transcriptEl, deps } = createTranscriptView();
+	Object.assign(deps, { tools: { list: () => [] } as never });
+	const sessionStore = {
+		getActive: () => ({
+			id: "session-a",
+			title: "Session",
+			createdAt: 1,
+			updatedAt: 1,
+			turns: [],
+			model: "gpt-4o-mini",
+			lastClassicModel: "gpt-4o-mini",
+		}),
+		getSessions: () => [],
+		rename: vi.fn(async () => undefined),
+		updateModel: vi.fn(async () => undefined),
+		updateTurns: vi.fn(async () => undefined),
+	};
+	Object.assign(deps, { sessionStore: sessionStore as never });
+	const inputEl = new MockElement("textarea");
+	Object.assign(view as unknown as Record<string, unknown>, {
+		transcriptEl,
+		inputEl,
+		modelInputEl: new MockElement("input"),
+		imageModelInputEl: new MockElement("input"),
+		sendBtn: new MockElement("button"),
+		stopBtn: new MockElement("button"),
+	});
+	return { view, transcriptEl, inputEl };
+}
+
+describe("ChatView streamed text", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it("appends streamed text in place instead of rebuilding the transcript", async () => {
+		vi.stubGlobal("window", oaWindowShim());
+		const { view, transcriptEl, inputEl } = createSendView();
+		const emptySpy = vi.spyOn(transcriptEl, "empty");
+		const pulls: Array<{ emptyCalls: number; bodies: MockElement[]; texts: string[] }> = [];
+		fetchMock.mockResolvedValue(
+			oaDeltaStream(["a", "b", "c"], {
+				delayMs: 60,
+				onPull: () => {
+					const assistantRow = findByClass(transcriptEl, "open-agent-turn-assistant")[0];
+					const bodies = assistantRow ? findByClass(assistantRow, "open-agent-turn-body") : [];
+					pulls.push({
+						emptyCalls: emptySpy.mock.calls.length,
+						bodies,
+						texts: bodies.map((body) => body.textContent),
+					});
+				},
+			}),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+
+		inputEl.value = "hello";
+		await (view as unknown as { handleSend(): Promise<void> }).handleSend();
+
+		const bodyPulls = pulls.filter((pull) => pull.bodies.length > 0);
+		expect(bodyPulls.length).toBeGreaterThan(1);
+		const firstBody = bodyPulls[0].bodies[0];
+		for (const pull of bodyPulls) {
+			expect(pull.bodies).toHaveLength(1);
+			expect(pull.bodies[0]).toBe(firstBody);
+			expect(pull.emptyCalls).toBe(bodyPulls[0].emptyCalls);
+		}
+		const texts = bodyPulls.map((pull) => pull.texts[0]);
+		expect(texts[0]).toBe("a");
+		expect(texts[texts.length - 1]).toBe("abc");
+		expect(textTree(transcriptEl)).toContain("abc");
+	});
+
+	it("only scrolls to the bottom when the reader is already near it", () => {
+		const { view, transcriptEl } = createTranscriptView();
+		transcriptEl.scrollHeight = 1000;
+		transcriptEl.clientHeight = 500;
+		transcriptEl.scrollTop = 10;
+
+		renderTranscriptOf(view);
+		expect(transcriptEl.scrollTop).toBe(10);
+
+		transcriptEl.scrollTop = 500;
+		renderTranscriptOf(view);
+		expect(transcriptEl.scrollTop).toBe(1000);
+	});
+
+	it("follows the stream when the reader is at the bottom", () => {
+		const { view, transcriptEl, turn, segment } = createAppendingView("hello");
+		transcriptEl.scrollHeight = 1000;
+		transcriptEl.clientHeight = 500;
+		transcriptEl.scrollTop = 500;
+
+		appendDelta(view, turn, segment, "hello there");
+
+		expect(segment.text).toBe("hello there");
+		expect(transcriptEl.scrollTop).toBe(1000);
+	});
+
+	it("leaves the view alone when the reader has scrolled away", () => {
+		const { view, transcriptEl, turn, segment } = createAppendingView("hello");
+		transcriptEl.scrollHeight = 1000;
+		transcriptEl.clientHeight = 500;
+		transcriptEl.scrollTop = 10;
+
+		appendDelta(view, turn, segment, "hello there");
+
+		expect(segment.text).toBe("hello there");
+		expect(transcriptEl.scrollTop).toBe(10);
+	});
+
+	it("scrolls at 32 px from the bottom and stops at 33 px", () => {
+		const { view, transcriptEl, turn, segment } = createAppendingView("hello");
+		transcriptEl.scrollHeight = 1000;
+		transcriptEl.clientHeight = 500;
+		transcriptEl.scrollTop = 467;
+
+		appendDelta(view, turn, segment, "hello there");
+		expect(transcriptEl.scrollTop).toBe(467);
+
+		transcriptEl.scrollTop = 468;
+		appendDelta(view, turn, segment, "hello there again");
+		expect(transcriptEl.scrollTop).toBe(1000);
+	});
+
+	it("names the plain-text fallback instead of claiming the endpoint cannot stream", () => {
+		const { view, transcriptEl } = createTranscriptView();
+		(view as unknown as { turns: unknown[] }).turns = [
+			{
+				role: "assistant",
+				content: "",
+				segments: [{ kind: "text", text: "fallback answer" }],
+				toolCallMap: {},
+				thinking: false,
+				generatedImages: [],
+				degraded: true,
+			},
+		];
+
+		renderTranscriptOf(view);
+
+		const tree = textTree(transcriptEl);
+		expect(tree).toContain("Response format unsupported — this reply used the plain-text fallback.");
+		expect(tree).not.toContain("Non-streaming response");
+	});
+
+	it("finishes the turn when the stream ends without a finish reason", async () => {
+		vi.stubGlobal("window", oaWindowShim());
+		const { view, transcriptEl, inputEl } = createSendView();
+		fetchMock.mockResolvedValue(oaDeltaStream(["streamed", " answer"]));
+		vi.stubGlobal("fetch", fetchMock);
+
+		inputEl.value = "hello";
+		await (view as unknown as { handleSend(): Promise<void> }).handleSend();
+
+		expect((view as unknown as { inFlights: Map<string, unknown> }).inFlights.size).toBe(0);
+		expect(textTree(transcriptEl)).toContain("streamed answer");
 	});
 });

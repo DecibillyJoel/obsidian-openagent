@@ -64,6 +64,9 @@ export class MockElement {
 	value = "";
 	disabled = false;
 	checked = false;
+	scrollTop = 0;
+	scrollHeight = 0;
+	clientHeight = 0;
 	attrs: Record<string, string> = {};
 	parentElement: MockElement | null = null;
 	children: MockElement[] = [];

@@ -182,6 +182,8 @@ export class ChatView extends ItemView {
 	// Render debounce state
 	private renderDebounceTimer: number | null = null;
 	private lastRenderTime = 0;
+	// Streaming text cache: lets a text delta repaint one body element instead of rebuilding.
+	private readonly textBodyEls = new Map<AssistantSegment, HTMLElement>();
 
 	// Panel state
 	private sessionsPanelVisible = false;
@@ -1072,7 +1074,7 @@ export class ChatView extends ItemView {
 						assistantTurn.segments.push({ kind: "text", text: ev.text });
 					}
 					// Only update the UI if the user is still viewing this session's turns.
-					if (this.turns.includes(assistantTurn)) this.scheduleRender();
+					if (this.turns.includes(assistantTurn)) this.appendStreamedText(assistantTurn);
 					// Yield to the browser so it can repaint between token chunks.
 					await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
 					continue;
@@ -1394,6 +1396,7 @@ export class ChatView extends ItemView {
 		const busy = this.inFlights.has(activeId);
 
 		this.transcriptEl.empty();
+		this.textBodyEls.clear();
 		for (let i = 0; i < this.turns.length; i++) {
 			const turn = this.turns[i];
 			const row = this.transcriptEl.createDiv({ cls: `open-agent-turn open-agent-turn-${turn.role}` });
@@ -1516,6 +1519,7 @@ export class ChatView extends ItemView {
 								if (busy) {
 									// Plain text during streaming to avoid flicker from async MarkdownRenderer
 									body.setText(seg.text);
+									this.textBodyEls.set(seg, body);
 								} else {
 									void MarkdownRenderer.render(this.app, seg.text, body, "", this);
 								}
@@ -1532,7 +1536,7 @@ export class ChatView extends ItemView {
 			if (turn.degraded) {
 				row.createEl("div", {
 					cls: "open-agent-turn-meta",
-					text: "Non-streaming response — your endpoint does not support streaming.",
+					text: "Response format unsupported — this reply used the plain-text fallback.",
 				});
 			}
 			if (turn.capHit) {
@@ -1551,7 +1555,34 @@ export class ChatView extends ItemView {
 				}
 			}
 		}
-		this.transcriptEl.scrollTop = this.transcriptEl.scrollHeight;
+		this.scrollTranscriptToEnd();
+	}
+
+	/** Scroll to the newest content only when the reader is parked near the bottom. */
+	private scrollTranscriptToEnd(): void {
+		const fromBottom = this.transcriptEl.scrollHeight - this.transcriptEl.scrollTop - this.transcriptEl.clientHeight;
+		if (fromBottom <= 32) this.transcriptEl.scrollTop = this.transcriptEl.scrollHeight;
+	}
+
+	/**
+	 * Paint the newest streamed text in place. The first delta of a streaming turn rebuilds the
+	 * transcript once, which caches the body element. Later deltas only set the text of that element.
+	 */
+	private appendStreamedText(turn: UiTurn): void {
+		const lastSeg = turn.segments[turn.segments.length - 1];
+		if (lastSeg?.kind !== "text") {
+			this.scheduleRender();
+			return;
+		}
+		const body = this.textBodyEls.get(lastSeg);
+		if (body) {
+			body.setText(lastSeg.text);
+			this.scrollTranscriptToEnd();
+			return;
+		}
+		// No body element yet: rebuild once so the cache holds the element for later deltas.
+		this.renderTranscript();
+		if (!this.textBodyEls.has(lastSeg)) this.scheduleRender();
 	}
 
 	private async submitEdit(turnIndex: number): Promise<void> {
