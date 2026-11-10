@@ -223,6 +223,41 @@ export function createMockApp(options?: {
 
 export const requestUrlMock = vi.fn(async () => ({ status: 200, json: { data: [] } }));
 
+export const fetchMock = vi.fn();
+
+/** Build a Response-like object whose body is an SSE stream. */
+export function oaSseResponse(
+	payloads: string[],
+	opts: { contentType?: string; chunkSize?: number; error?: Error } = {},
+): unknown {
+	const contentType = opts.contentType ?? "text/event-stream";
+	const chunkSize = opts.chunkSize ?? 1024;
+	const encoder = new TextEncoder();
+	const all = encoder.encode(payloads.join(""));
+	let position = 0;
+	const stream = new ReadableStream<Uint8Array>({
+		pull(controller) {
+			if (opts.error && position >= all.length / 2) {
+				controller.error(opts.error);
+				return;
+			}
+			if (position >= all.length) {
+				controller.close();
+				return;
+			}
+			controller.enqueue(all.slice(position, position + chunkSize));
+			position += chunkSize;
+		},
+	});
+	return {
+		ok: true,
+		status: 200,
+		headers: { get: (name: string) => (name.toLowerCase() === "content-type" ? contentType : null) },
+		body: stream,
+		text: async () => new TextDecoder().decode(all),
+	};
+}
+
 export const NoticeMock = vi.fn(function Notice(this: { message: string }, message: string) {
 	this.message = message;
 });
