@@ -1,6 +1,6 @@
 {
   "name": "obsidian-open-agent",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Vault-aware AI agent with tools and your own API keys.",
   "main": "main.js",
   "repository": {
