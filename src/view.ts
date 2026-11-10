@@ -1815,7 +1815,7 @@ export class ChatView extends ItemView {
 					done = true;
 					for (const other of buttons) other.disabled = true;
 					if (oaApplyConsentDecision(tc, choice)) button.setText(label);
-					this.deps.consent.resolveConsent(choice);
+					this.deps.consent.resolveConsent(choice, tc.id);
 					this.scheduleRender();
 				});
 			};

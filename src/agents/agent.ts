@@ -159,7 +159,7 @@ async function* executeAgentLoop(
 					continue;
 				}
 				yield { kind: "consent_requested", id: call.id, name: call.name };
-				const approved = await opts.consent.requestApproval(toolDef, validated.value);
+				const approved = await opts.consent.requestApproval(toolDef, validated.value, call.id);
 				if (!approved) {
 					const result: ToolResult = {
 						ok: false,
