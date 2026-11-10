@@ -22,6 +22,8 @@ export {
 	OA_MAX_TOTAL_IMAGE_BYTES,
 } from "./constants";
 
+export const OA_MAX_DATA_URL_BYTES = 24 * 1024 * 1024;
+
 export interface PendingImage {
 	id: string;
 	name: string;
@@ -67,6 +69,7 @@ export function oaSanitizeImages(value: unknown): PendingImage[] {
 		const size = typeof record.size === "number" && Number.isFinite(record.size) ? record.size : 0;
 		if (!OA_IMAGE_MIMES.has(mimeType)) continue;
 		if (!url.startsWith(`data:${mimeType};base64,`)) continue;
+		if (url.length > OA_MAX_DATA_URL_BYTES) continue;
 		const limit = mimeType === "image/png" ? OA_MAX_PNG_BYTES : OA_MAX_IMAGE_BYTES;
 		if (size <= 0 || size > limit) continue;
 		if (total + size > OA_MAX_TOTAL_IMAGE_BYTES) continue;
@@ -172,6 +175,7 @@ export async function oaResolveToolImages(app: App, ctx: unknown): Promise<Pendi
 			}
 			const pngSize = Math.ceil((url.length * 3) / 4);
 			if (total + pngSize > OA_MAX_TOTAL_IMAGE_BYTES) continue;
+			if (url.length > OA_MAX_DATA_URL_BYTES) continue;
 			seen.add(target);
 			images.push({
 				id: crypto.randomUUID(),
@@ -206,13 +210,15 @@ export async function oaResolveToolImages(app: App, ctx: unknown): Promise<Pendi
 			continue;
 		}
 		if (total + png.byteLength > OA_MAX_TOTAL_IMAGE_BYTES) continue;
+		const url = oaBytesToDataUrl(png, "image/png");
+		if (url.length > OA_MAX_DATA_URL_BYTES) continue;
 		seen.add(file.path);
 		images.push({
 			id: crypto.randomUUID(),
 			name: file.path,
 			mimeType: "image/png",
 			size: png.byteLength,
-			url: oaBytesToDataUrl(png, "image/png"),
+			url,
 		});
 		total += png.byteLength;
 	}
@@ -225,7 +231,9 @@ export function getConversationImages(
 	const images: PendingImage[] = [];
 	for (const turn of turns) {
 		for (const image of turn.images ?? []) {
-			if (image && typeof image.url === "string" && image.url.length > 0) images.push(image);
+			if (!image || typeof image.url !== "string" || image.url.length === 0) continue;
+			if (image.url.length > OA_MAX_DATA_URL_BYTES) continue;
+			images.push(image);
 		}
 	}
 	return images.slice(-OA_MAX_IMAGES);

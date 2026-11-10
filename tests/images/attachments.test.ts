@@ -3,6 +3,7 @@ import { requestUrl } from "obsidian";
 import {
 	getConversationImages,
 	OA_IMAGE_MIMES,
+	OA_MAX_DATA_URL_BYTES,
 	OA_MAX_IMAGE_BYTES,
 	OA_MAX_IMAGES,
 	OA_MAX_PNG_BYTES,
@@ -29,6 +30,8 @@ const JPEG_BYTES = new Uint8Array([0xff, 0xd8, 0xff, 0xe0]);
 const requestUrlMock = requestUrl as unknown as ReturnType<typeof vi.fn>;
 
 class MockOffscreenCanvas {
+	static png: Uint8Array = pngBytes();
+
 	constructor(
 		public width: number,
 		public height: number,
@@ -39,11 +42,12 @@ class MockOffscreenCanvas {
 	}
 
 	async convertToBlob(): Promise<Blob> {
-		return new Blob([pngBytes()]);
+		return new Blob([MockOffscreenCanvas.png]);
 	}
 }
 
-function stubPngConversion(): void {
+function stubPngConversion(png: Uint8Array = pngBytes()): void {
+	MockOffscreenCanvas.png = png;
 	vi.stubGlobal("OffscreenCanvas", MockOffscreenCanvas);
 	vi.stubGlobal(
 		"createImageBitmap",
@@ -210,6 +214,14 @@ describe("oaSanitizeImages", () => {
 		expect(oaSanitizeImages([jpeg])).toHaveLength(0);
 	});
 
+	it("drops an image whose data URL exceeds the per-image payload limit", () => {
+		const prefix = "data:image/png;base64,";
+		const atLimit = image({ url: prefix + "A".repeat(OA_MAX_DATA_URL_BYTES - prefix.length) });
+		expect(atLimit.url.length).toBe(OA_MAX_DATA_URL_BYTES);
+		expect(oaSanitizeImages([atLimit])).toHaveLength(1);
+		expect(oaSanitizeImages([image({ url: `${atLimit.url}A` })])).toEqual([]);
+	});
+
 	it("generates an id when one is missing and returns an empty list for non-arrays", () => {
 		const withoutId = { ...image(), id: undefined } as unknown as PendingImage;
 		const result = oaSanitizeImages([withoutId]);
@@ -240,6 +252,23 @@ describe("getConversationImages", () => {
 		}));
 		expect(getConversationImages(many)).toHaveLength(OA_MAX_IMAGES);
 		expect(getConversationImages().length).toBe(0);
+	});
+
+	it("takes at most OA_MAX_IMAGES images across twelve turns", () => {
+		const turns = Array.from({ length: 12 }, (_value, index) => ({
+			images: [image({ id: `i${index}`, url: `data:image/png;base64,i${index}==` })],
+		}));
+		expect(getConversationImages(turns)).toHaveLength(OA_MAX_IMAGES);
+	});
+
+	it("skips an image whose data URL exceeds the per-image payload limit", () => {
+		const prefix = "data:image/png;base64,";
+		const turns = [
+			{ images: [image({ id: "small", url: "data:image/png;base64,aa==" })] },
+			{ images: [image({ id: "huge", url: prefix + "A".repeat(OA_MAX_DATA_URL_BYTES) })] },
+			{ images: [image({ id: "small-2", url: "data:image/png;base64,bb==" })] },
+		];
+		expect(getConversationImages(turns).map((entry) => entry.id)).toEqual(["small", "small-2"]);
 	});
 });
 
@@ -341,6 +370,18 @@ describe("oaResolveToolImages", () => {
 		const images = await oaResolveToolImages(app as never, {
 			ok: true,
 			value: { path: "Notes/source.md", links: ["![[Attachments/a.png]]"] },
+		});
+		expect(images).toEqual([]);
+	});
+
+	it("drops a converted image whose data URL exceeds the per-image payload limit", async () => {
+		const oversized = new Uint8Array(Math.ceil((OA_MAX_DATA_URL_BYTES * 3) / 4) + 3);
+		oversized.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+		stubPngConversion(oversized);
+		const app = makeApp(JPEG_BYTES, JPEG_BYTES.length, "Attachments/a.jpg");
+		const images = await oaResolveToolImages(app as never, {
+			ok: true,
+			value: { path: "Notes/source.md", links: ["![[Attachments/a.jpg]]"] },
 		});
 		expect(images).toEqual([]);
 	});

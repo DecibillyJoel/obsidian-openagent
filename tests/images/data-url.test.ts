@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
 	oaBase64ByteSize,
 	oaBase64ToBuffer,
@@ -7,6 +7,7 @@ import {
 } from "../../src/images/data-url";
 
 const PNG_HEADER = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const CHUNK_BYTES = 32768;
 
 describe("oaBufferToDataUrl", () => {
 	it("encodes bytes as a base64 data URL", () => {
@@ -27,6 +28,28 @@ describe("oaBufferToDataUrl", () => {
 		expect(decoded?.length).toBe(bytes.length);
 		expect(decoded?.[0]).toBe(0x41);
 		expect(decoded?.[bytes.length - 1]).toBe(0x41);
+	});
+
+	it("fills one reusable char-code buffer per 32 KiB chunk", () => {
+		const bytes = new Uint8Array(CHUNK_BYTES * 3 + 1).fill(0x41);
+		const fromCharCode = vi.spyOn(String, "fromCharCode");
+		const subarray = vi.spyOn(bytes, "subarray");
+		try {
+			oaBufferToDataUrl(bytes, "image/png");
+			expect(fromCharCode.mock.calls).toHaveLength(4);
+			expect(subarray).not.toHaveBeenCalled();
+		} finally {
+			fromCharCode.mockRestore();
+			subarray.mockRestore();
+		}
+	});
+
+	it("matches a per-byte reference encoder exactly", () => {
+		const bytes = new Uint8Array(CHUNK_BYTES * 3 + 1);
+		for (let index = 0; index < bytes.length; index++) bytes[index] = index % 256;
+		let reference = "";
+		for (const byte of bytes) reference += String.fromCharCode(byte);
+		expect(oaBufferToDataUrl(bytes, "image/png")).toBe(`data:image/png;base64,${btoa(reference)}`);
 	});
 
 	it("round-trips through oaDataUrlToBytes", () => {

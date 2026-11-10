@@ -1,12 +1,14 @@
 const DATA_URL_CHUNK_BYTES = 32768;
 const DATA_URL_DECODE_MAX_BYTES = 96 * 1024 * 1024;
+const dataUrlCharCodes = new Uint16Array(DATA_URL_CHUNK_BYTES);
 
 export function oaBufferToDataUrl(buf: Uint8Array | ArrayBuffer, mime: string): string {
 	const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
 	let binary = "";
 	for (let offset = 0; offset < bytes.length; offset += DATA_URL_CHUNK_BYTES) {
-		const chunk = bytes.subarray(offset, offset + DATA_URL_CHUNK_BYTES);
-		binary += String.fromCharCode(...chunk);
+		const length = Math.min(DATA_URL_CHUNK_BYTES, bytes.length - offset);
+		for (let index = 0; index < length; index++) dataUrlCharCodes[index] = bytes[offset + index];
+		binary += String.fromCharCode(...dataUrlCharCodes.subarray(0, length));
 	}
 	return `data:${mime};base64,${btoa(binary)}`;
 }
