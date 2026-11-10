@@ -167,7 +167,7 @@ export type LoopEvent =
 	| { kind: "consent_requested"; id: string; name: string }
 	| { kind: "tool_call_finished"; id: string; result: ToolResult }
 	| { kind: "cap_hit" }
-	| { kind: "done" };
+	| { kind: "done"; finishReason?: "stop" | "tool_calls" | "length" | "content_filter" | "unknown" };
 
 // Errors
 export class AuthError extends Error {

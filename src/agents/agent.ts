@@ -22,7 +22,7 @@ import type {
 	ToolResult,
 } from "../types";
 
-const DEFAULT_MAX_STEPS = 9999;
+const DEFAULT_MAX_STEPS = 8;
 
 interface BoundTools {
 	get(name: string): ToolDef | undefined;
@@ -78,6 +78,7 @@ async function* executeAgentLoop(
 	for (let step = 0; step < maxSteps; step++) {
 		const assembled: AssembledToolCall[] = [];
 		let assistantText = "";
+		let finishReason: "stop" | "tool_calls" | "length" | "content_filter" | "unknown" | undefined;
 
 		for await (const ev of opts.provider.stream(messages, {
 			signal: opts.signal,
@@ -94,6 +95,8 @@ async function* executeAgentLoop(
 				yield { kind: "images", urls: ev.urls };
 			} else if (ev.kind === "tool_call_assembled") {
 				assembled.push(...ev.calls);
+			} else if (ev.kind === "done") {
+				finishReason = ev.finishReason;
 			}
 		}
 
@@ -102,7 +105,7 @@ async function* executeAgentLoop(
 			if (step > 0 && assistantText.trim() === "") {
 				yield { kind: "text", text: "*(No response from the model after tool use.)*", degraded: true };
 			}
-			yield { kind: "done" };
+			yield finishReason ? { kind: "done", finishReason } : { kind: "done" };
 			return;
 		}
 
