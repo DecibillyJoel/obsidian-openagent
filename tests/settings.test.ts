@@ -1,7 +1,19 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { DEFAULT_SETTINGS, OpenAgentSettingsTab, type PluginSettings } from "../src/settings";
+import { DEFAULT_SETTINGS, OpenAgentSettingsTab, isConfigured, type PluginSettings } from "../src/settings";
 import { oaSanitizeModelCategories } from "../src/models/categories";
 import { MockElement, createMockApp, requestUrlMock, settingControls } from "./setup";
+
+describe("isConfigured", () => {
+	it("does not throw when a stored field is not a string", () => {
+		const broken = { ...DEFAULT_SETTINGS, apiKey: 42 as unknown as string };
+		expect(() => isConfigured(broken)).not.toThrow();
+		expect(isConfigured(broken)).toBe(false);
+	});
+
+	it("still reports a complete configuration as configured", () => {
+		expect(isConfigured({ ...DEFAULT_SETTINGS, baseUrl: "https://x/v1", apiKey: "k", model: "m" })).toBe(true);
+	});
+});
 
 describe("model categories in settings", () => {
 	it("defaults to an empty list", () => {

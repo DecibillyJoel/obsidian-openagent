@@ -36,8 +36,16 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 	modelCategories: [],
 };
 
+/** Reads a stored field as text. Returns an empty string when the stored value is not a string. */
+function storedString(value: unknown): string {
+	return typeof value === "string" ? value : "";
+}
+
 export function isConfigured(s: PluginSettings): boolean {
-	return s.baseUrl.trim().length > 0 && s.apiKey.trim().length > 0 && s.model.trim().length > 0;
+	const baseUrl = storedString(s.baseUrl).trim();
+	const apiKey = storedString(s.apiKey).trim();
+	const model = storedString(s.model).trim();
+	return baseUrl.length > 0 && apiKey.length > 0 && model.length > 0;
 }
 
 export class OpenAgentSettingsTab extends PluginSettingTab {
