@@ -106,17 +106,52 @@ describe("oaSanitizeModelCategories", () => {
             { id: "c4", name: "No models" },
             { id: "c5", name: "Bad models", models: "b" },
         ]);
-        expect(result).toHaveLength(2);
+        expect(result).toHaveLength(4);
         expect(result[0]).toEqual({ id: "c1", name: "Keep", kind: "text", models: ["a", "2"] });
         expect(result[1].name).toBe("No id");
         expect(result[1].id.length).toBeGreaterThan(0);
         expect(result[1].models).toEqual(["b"]);
+        expect(result[2]).toEqual({ id: "c4", name: "No models", kind: "text", models: [] });
+        expect(result[3]).toEqual({ id: "c5", name: "Bad models", kind: "text", models: [] });
     });
 
-    it("keeps an empty name, so a new category survives a reload", () => {
-        expect(oaSanitizeModelCategories([{ id: "c1", name: "", models: [] }])).toEqual([
-            { id: "c1", name: "", kind: "text", models: [] },
+    it("keeps an entry whose models field is missing", () => {
+        expect(oaSanitizeModelCategories([{ id: "cat-1", name: "Favourites" }])).toEqual([
+            { id: "cat-1", name: "Favourites", kind: "text", models: [] },
         ]);
+        expect(oaSanitizeModelCategories([{ id: "cat-2", name: "Bad models", models: "b" }])).toEqual([
+            { id: "cat-2", name: "Bad models", kind: "text", models: [] },
+        ]);
+    });
+
+    it("keeps an entry whose name is blank", () => {
+        expect(oaSanitizeModelCategories([{ id: "cat-1", name: "", models: ["a"] }])).toEqual([
+            { id: "cat-1", name: "", kind: "text", models: ["a"] },
+        ]);
+    });
+
+    it("trims padding from a stored name", () => {
+        const result = oaSanitizeModelCategories([{ id: "cat-1", name: "  Favourites  ", models: [] }]);
+        expect(result[0].name).toBe("Favourites");
+    });
+
+    it("drops an entry whose name is not a string", () => {
+        expect(oaSanitizeModelCategories([{ id: "cat-1", name: 42, models: [] }])).toEqual([]);
+    });
+
+    it("keeps a freshly created category through a second pass", () => {
+        const fresh = oaSanitizeModelCategories([{ id: "cat-new", name: "", kind: "text", models: [] }]);
+        expect(fresh).toEqual([{ id: "cat-new", name: "", kind: "text", models: [] }]);
+        const again = oaSanitizeModelCategories(fresh);
+        expect(again.map((category) => category.id)).toContain("cat-new");
+    });
+
+    it("de-duplicates ids and keeps the first entry", () => {
+        const out = oaSanitizeModelCategories([
+            { id: "cat-1", name: "First", models: ["a"] },
+            { id: "cat-1", name: "Second", models: ["b"] },
+        ]);
+        expect(out).toEqual([{ id: "cat-1", name: "First", kind: "text", models: ["a"] }]);
     });
 
     it("gives a category with no kind the text kind", () => {

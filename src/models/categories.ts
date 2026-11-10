@@ -65,17 +65,22 @@ export function oaSanitizeModelCategories(raw: unknown): ModelCategory[] {
         return [];
     }
     const categories: ModelCategory[] = [];
+    const seenIds = new Set<string>();
     for (const entry of raw) {
         if (typeof entry !== "object" || entry === null) {
             continue;
         }
         const record = entry as { id?: unknown; name?: unknown; kind?: unknown; models?: unknown };
-        if (typeof record.name !== "string" || !Array.isArray(record.models)) {
+        if (typeof record.name !== "string") {
             continue;
         }
         const id = typeof record.id === "string" && record.id ? record.id : oaNewModelCategoryId();
+        if (seenIds.has(id)) {
+            continue;
+        }
+        seenIds.add(id);
         const kind: ModelCategoryKind = record.kind === "image" ? "image" : "text";
-        categories.push({ id, name: record.name, kind, models: oaCleanMembers(record.models) });
+        categories.push({ id, name: record.name.trim(), kind, models: oaCleanMembers(record.models) });
     }
     return categories;
 }
