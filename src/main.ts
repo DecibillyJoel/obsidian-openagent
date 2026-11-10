@@ -1,4 +1,4 @@
-import { Notice, Platform, Plugin, TFile, TFolder, Workspace, WorkspaceLeaf } from "obsidian";
+import { Notice, Plugin, TFile, TFolder, Workspace, WorkspaceLeaf } from "obsidian";
 import { ensureDefaultPacks, loadPacks } from "./packs/loader";
 import { runPack, type PackRuntimeEvent, type PackRunResult } from "./packs/runtime";
 import type { AgentPack } from "./packs/types";
@@ -12,6 +12,7 @@ import { openAgentImageGenerateTool } from "./tools/image-generate";
 import { openAgentImageRegionTool } from "./tools/image-region";
 import { ensureParentFolder } from "./tools/vault/ensure-folder";
 import { CHAT_VIEW_TYPE, ChatView } from "./view";
+import { isMobile } from "./platform";
 import { oaAnnotateTools } from "./images/geometry";
 import { oaSanitizeModelCategories } from "./models/categories";
 
@@ -150,7 +151,7 @@ export default class OpenAgentPlugin extends Plugin {
 			focusLeaf(workspace, existing[0]);
 			return existing[0].view instanceof ChatView ? existing[0].view : null;
 		}
-		const leaf = Platform.isMobile ? workspace.getLeaf("tab") : workspace.getRightLeaf(false);
+		const leaf = isMobile() ? workspace.getLeaf("tab") : workspace.getRightLeaf(false);
 		if (!leaf) return null;
 		await leaf.setViewState({ type: CHAT_VIEW_TYPE, active: true });
 		focusLeaf(workspace, leaf);
