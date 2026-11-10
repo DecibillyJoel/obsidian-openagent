@@ -85,11 +85,25 @@ function renderImageModelSetting(stored: string): MockElement {
 }
 
 /** Answers the endpoint with the image catalog, then clicks the setting's Fetch button. */
-async function clickFetch(): Promise<void> {
-	requestUrlMock.mockResolvedValue({ status: 200, text: IMAGE_CATALOG_REPLY });
+async function clickFetch(catalogReply: string = IMAGE_CATALOG_REPLY): Promise<void> {
+	requestUrlMock.mockResolvedValue({ status: 200, text: catalogReply });
 	const handler = settingControls.at(-1)?.buttonHandlers[0];
 	if (!handler) throw new Error("the model setting did not render a fetch button");
 	await handler();
+}
+
+/** The pseudo options the select owns, above the painted groups. */
+function topLevelOptionValuesOf(select: MockElement): string[] {
+	return select.children
+		.filter((child) => child.tagName === "option")
+		.map((option) => option.value);
+}
+
+/** Every option the select holds, the pseudo options and the painted groups. */
+function allOptionValuesOf(select: MockElement): string[] {
+	return select.children.flatMap((child) =>
+		child.tagName === "optgroup" ? child.children.map((option) => option.value) : [child.value],
+	);
 }
 
 /** The options inside the painted groups, without the pseudo options above them. */
@@ -97,6 +111,57 @@ function optgroupValuesOf(select: MockElement): string[] {
 	return select.children
 		.filter((child) => child.tagName === "optgroup")
 		.flatMap((group) => group.children.map((option) => option.value));
+}
+
+/** A text catalog answer. An id with no architecture carries no known kind. */
+function textCatalogReply(ids: string[]): string {
+	return JSON.stringify({ data: ids.map((id) => ({ id })) });
+}
+
+/**
+ * Renders the "Model" setting for a stored value and returns the select it
+ * painted. `saved` collects every value the setting persists.
+ */
+function renderModelSettingWithCatalog(stored: string): { select: MockElement; saved: string[] } {
+	const settings: PluginSettings = {
+		...DEFAULT_SETTINGS,
+		baseUrl: "https://example.test/v1",
+		apiKey: "token",
+		model: stored,
+	};
+	const saved: string[] = [];
+	const plugin = { settings, saveSettings: async () => undefined, manifest: { dir: "test" } };
+	const tab = new OpenAgentSettingsTab(createMockApp() as never, plugin as never);
+
+	const call = tab as unknown as {
+		renderModelSetting(
+			container: MockElement,
+			name: string,
+			desc: string,
+			getValue: () => string,
+			onSave: (value: string) => Promise<void>,
+			getBaseUrl: () => string,
+			getApiKey: () => string,
+			kind: "text" | "image",
+		): void;
+	};
+	call.renderModelSetting(
+		new MockElement("div"),
+		"Model",
+		"",
+		() => settings.model,
+		async (value) => {
+			saved.push(value);
+			settings.model = value;
+		},
+		() => settings.baseUrl,
+		() => settings.apiKey,
+		"text",
+	);
+
+	const select = settingControls.at(-1)?.select;
+	if (!select) throw new Error("the model setting did not render a dropdown");
+	return { select, saved };
 }
 
 describe("model dropdowns in settings", () => {
@@ -107,14 +172,14 @@ describe("model dropdowns in settings", () => {
 	it("drops a stored image model the catalog knows cannot serve images", async () => {
 		const select = renderImageModelSetting("text-only-id");
 		await clickFetch();
-		expect(select.value).toBe("img-only-id");
+		expect(select.value).toBe("");
 		expect(optgroupValuesOf(select)).toEqual(["img-only-id"]);
 	});
 
 	it("drops a stored batch image model", async () => {
 		const select = renderImageModelSetting("img-a:batch");
 		await clickFetch();
-		expect(select.value).toBe("img-only-id");
+		expect(select.value).toBe("");
 		expect(optgroupValuesOf(select)).toEqual(["img-only-id"]);
 	});
 
@@ -123,5 +188,46 @@ describe("model dropdowns in settings", () => {
 		await clickFetch();
 		expect(select.value).toBe("gone-image");
 		expect(optgroupValuesOf(select)).toEqual(["gone-image", "img-only-id"]);
+	});
+
+	it("offers the stored model before a Fetch fills the catalog", () => {
+		const { select } = renderModelSettingWithCatalog("b");
+		expect(topLevelOptionValuesOf(select)).toEqual(["b"]);
+		expect(allOptionValuesOf(select)).toContain("b");
+		expect(select.value).toBe("b");
+	});
+});
+
+describe("fetching a model catalog in settings", () => {
+	beforeEach(() => {
+		settingControls.length = 0;
+	});
+
+	it("does not choose a model when the stored value is empty", async () => {
+		const { select, saved } = renderModelSettingWithCatalog("");
+		await clickFetch(textCatalogReply(["a", "b"]));
+		expect(select.value).toBe("");
+		expect(saved).toEqual([]);
+	});
+
+	it("keeps the stored model when the catalog holds it", async () => {
+		const { select, saved } = renderModelSettingWithCatalog("b");
+		await clickFetch(textCatalogReply(["a", "b"]));
+		expect(select.value).toBe("b");
+		expect(saved).toEqual([]);
+	});
+
+	it("keeps a stored model the catalog missed and does not persist it", async () => {
+		const { select, saved } = renderModelSettingWithCatalog("gone");
+		await clickFetch(textCatalogReply(["a", "b"]));
+		expect(select.value).toBe("gone");
+		expect(saved).toEqual([]);
+	});
+
+	it("does not persist the stored model when Fetch returns a different catalog", async () => {
+		const { select, saved } = renderModelSettingWithCatalog("b");
+		await clickFetch(textCatalogReply(["x", "y"]));
+		expect(select.value).toBe("b");
+		expect(saved).toEqual([]);
 	});
 });

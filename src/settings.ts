@@ -305,15 +305,20 @@ export class OpenAgentSettingsTab extends PluginSettingTab {
 			if (!selectEl) return;
 			const current = getValue();
 			const allModels = oaCatalogWithCurrent(catalog, current, (id) => oaModelEligibleOrUnknown(id, kind));
-			const pseudo: ModelSelectPseudoOption[] = current
-				? [{ label: current, value: current }]
-				: [{ label: "— click Fetch to select —", value: "" }];
+			// A model the options do not hold is never selected for the user. The
+			// empty option stands in, so a fetch cannot save a substitute.
+			const kept = allModels.includes(current) ? current : "";
+			// The pseudo option carries the stored model, so the select holds one
+			// option even before a Fetch fills the catalog.
+			const pseudo: ModelSelectPseudoOption[] = kept
+				? [{ label: kept, value: kept }]
+				: [{ label: "— select a model —", value: "" }];
 			const groups =
 				allModels.length > 0
 					? oaBuildModelOptionGroups(allModels, this.plugin.settings.modelCategories, kind)
 					: [];
 			oaPaintModelSelect(selectEl, pseudo, groups);
-			selectEl.value = allModels.includes(current) ? current : (allModels[0] ?? current);
+			selectEl.value = kept;
 		};
 		this.modelSelectPainters.push(paint);
 
@@ -355,8 +360,9 @@ export class OpenAgentSettingsTab extends PluginSettingTab {
 
 					btn.setButtonText("Fetch models").setDisabled(false);
 					catalog = models;
+					// Paint only. A fetch never saves a model, so it cannot switch the
+					// user to one they did not choose.
 					paint();
-					await onSave(selectEl?.value ?? "");
 				});
 			});
 	}
