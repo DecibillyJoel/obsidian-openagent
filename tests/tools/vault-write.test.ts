@@ -18,6 +18,7 @@ vi.mock("obsidian", () => ({
 		return entries
 			.map(([key, item]) => {
 				if (item === null || item === undefined) return `${key}: null`;
+				if (typeof item === "string") return `${key}: '${item}'`;
 				if (typeof item === "object") return `${key}: ${JSON.stringify(item)}`;
 				return `${key}: ${String(item)}`;
 			})
@@ -48,7 +49,7 @@ describe("vault_write frontmatter", () => {
 		const after = writeFrontmatter(before, { date: "2021-02-02" });
 		expect(after).toContain("# my note");
 		expect(after.indexOf("tags")).toBeLessThan(after.indexOf("date"));
-		expect(after).toContain("date: 2021-02-02");
+		expect(after).toContain("date: '2021-02-02'");
 	});
 
 	it("keeps the block when the existing YAML cannot be parsed", () => {
@@ -59,5 +60,23 @@ describe("vault_write frontmatter", () => {
 
 	it("adds a key that the file does not have", () => {
 		expect(writeFrontmatter("---\ntags: [a]\n---\nbody\n", { star: true })).toContain("star: true");
+	});
+
+	it("keeps a blank line after the opening ---", () => {
+		const before = "---\n\n# x\ntags: 1\n---\nbody\n";
+		const after = writeFrontmatter(before, { tags: "2" });
+		expect(after).toBe("---\n\n# x\ntags: '2'\n---\nbody\n");
+	});
+
+	it("keeps a blank line before the closing ---", () => {
+		const before = "---\n# x\ntags: 1\n\n---\nbody\n";
+		const after = writeFrontmatter(before, { tags: "2" });
+		expect(after).toBe("---\n# x\ntags: '2'\n\n---\nbody\n");
+	});
+
+	it("keeps a blank line after the opening --- when no keys change", () => {
+		const before = "---\n\n# x\ntags: 1\n---\nbody\n";
+		const after = writeFrontmatter(before, {});
+		expect(after).toBe("---\n\n# x\ntags: 1\n---\nbody\n");
 	});
 });

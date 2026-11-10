@@ -56,12 +56,13 @@ export function stitchFrontmatter(
 		const yaml = stringifyYaml(frontmatter).trim();
 		return `---\n${yaml}\n---${cleanBody(body)}`;
 	}
-	const block = frontmatter.trim();
-	if (block === "") return body;
+	// Do not trim the block: a leading or trailing newline is a boundary blank line.
+	const trimmed = frontmatter.trim();
+	if (trimmed === "") return body;
 	const bodyClean = cleanBody(body);
-	if (FRONTMATTER_PATTERN.test(block)) return `${block}${bodyClean}`;
-	const newline = block.includes("\r\n") ? "\r\n" : "\n";
-	return `---${newline}${block}${newline}---${bodyClean}`;
+	if (FRONTMATTER_PATTERN.test(trimmed)) return `${trimmed}${bodyClean}`;
+	const newline = frontmatter.includes("\r\n") ? "\r\n" : "\n";
+	return `---${newline}${frontmatter}${newline}---${bodyClean}`;
 }
 
 function mergeFrontmatterText(existing: string, incoming: Record<string, unknown>): string {
