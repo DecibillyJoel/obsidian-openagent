@@ -1,5 +1,4 @@
 import { requestUrl } from "obsidian";
-import type { ChatContentImagePart } from "../types";
 import {
 	OA_IMAGE_MIMES,
 	OA_MAX_IMAGE_BYTES,
@@ -191,11 +190,11 @@ export async function oaImageUrlToPngDataUrl(url: string): Promise<string> {
 	return oaBytesToDataUrl(png, "image/png");
 }
 
-export async function oaToImageUrlPart(url: string): Promise<ChatContentImagePart | null> {
+export async function oaToImageUrlPart(url: string): Promise<{ url: string; error?: string }> {
 	try {
-		return { type: "image_url", image_url: { url: await oaImageUrlToPngDataUrl(url) } };
+		return { url: await oaImageUrlToPngDataUrl(url) };
 	} catch {
-		return null;
+		return { url: "", error: "ImageNormalizationFailed" };
 	}
 }
 

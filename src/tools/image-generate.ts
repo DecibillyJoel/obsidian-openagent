@@ -33,6 +33,9 @@ import { defineTool, fail, ok } from "./define";
 // The cap is 96 MB so that a 64 MB PNG survives base64 round-tripping.
 const OA_MAX_GENERATED_BASE64_BYTES = 96 * 1024 * 1024;
 
+// The single timeout value for this tool. It caps the tool definition and it
+// aborts the images POST, so the enforced limit and the declared limit agree.
+export const OA_IMAGE_GENERATION_TIMEOUT_MS = 330_000;
 
 export interface ImageGenerateArgs {
 	operation: "generate" | "edit";
@@ -158,7 +161,9 @@ export async function oaCollectGenerationReferences(
 	const addConversationImage = async (image: ConversationImageReference): Promise<void> => {
 		const name = conversationName(image);
 		if (typeof image.url === "string" && image.url.length > 0) {
-			push(await oaToImageUrlPart(image.url), name);
+			const part = await oaToImageUrlPart(image.url);
+			if (part.error) throw new Error(part.error);
+			push({ type: "image_url", image_url: { url: part.url } }, name);
 		} else if (typeof image.path === "string" && image.path.length > 0) {
 			push(await oaReferenceFromVaultPath(app, image.path), name);
 		}
@@ -232,7 +237,7 @@ export function openAgentImageGenerateTool(
 		mutates: true,
 		requiresApproval: false,
 		stopOnFailure: true,
-		timeoutMs: 330000,
+		timeoutMs: OA_IMAGE_GENERATION_TIMEOUT_MS,
 		schema: {
 			type: "object",
 			properties: {
@@ -302,7 +307,6 @@ export function openAgentImageGenerateTool(
 			}
 			const nameError = oaValidateDesiredName(args.desiredName);
 			if (nameError) return fail(nameError);
-			const deadline = Date.now() + 300000;
 
 			const settings = getSettings();
 			const model = (await ctx.getImageModel?.())?.trim() || settings.imageModel?.trim();
@@ -339,27 +343,57 @@ export function openAgentImageGenerateTool(
 			if (references.length > 0) body.input_references = references;
 			body.quality = args.userRequestedQuality || "high";
 
-			let response: Awaited<ReturnType<typeof requestUrl>>;
+			let response: { status: number; text: string };
+			if (ctx.signal?.aborted) return fail("ImageGenerationAborted");
+			// The bundle always posts to `${baseUrl}/images` with no query parameters and no
+			// provider-specific branch. This assumes an OpenAI-compatible gateway (Q18).
+			const url = `${baseUrl}/images`;
+			const headers = {
+				"Content-Type": "application/json",
+				Authorization: `Bearer ${settings.apiKey}`,
+			};
+			const requestBody = JSON.stringify(body);
+			// The harness timeout only rejects its race; it never aborts the caller signal.
+			// This controller links the caller signal to the request and enforces the same
+			// limit, so a timed-out request stops instead of writing a stray file later.
+			const controller = new AbortController();
+			let timedOut = false;
+			const timeoutFailure = `ImageGenerationTimeout: image generation exceeded ${OA_IMAGE_GENERATION_TIMEOUT_MS / 1000} seconds`;
+			const onCallerAbort = () => controller.abort();
+			ctx.signal?.addEventListener("abort", onCallerAbort);
+			const timer = setTimeout(() => {
+				timedOut = true;
+				controller.abort();
+			}, OA_IMAGE_GENERATION_TIMEOUT_MS);
 			try {
-				// The bundle always posts to `${baseUrl}/images` with no query parameters and no
-				// provider-specific branch. This assumes an OpenAI-compatible gateway (Q18).
-				response = await requestUrl({
-					url: `${baseUrl}/images`,
-					method: "POST",
-					contentType: "application/json",
-					headers: { Authorization: `Bearer ${settings.apiKey}` },
-					body: JSON.stringify(body),
-					throw: false,
-				});
+				if (typeof fetch === "function") {
+					const res = await fetch(url, {
+						method: "POST",
+						headers,
+						body: requestBody,
+						signal: controller.signal,
+					});
+					response = { status: res.status, text: await res.text() };
+				} else {
+					// `requestUrl` accepts no signal, so this branch cannot cancel the in-flight
+					// request. A response that arrives after the deadline is rejected below.
+					const res = await requestUrl({ url, method: "POST", headers, body: requestBody, throw: false });
+					response = { status: res.status, text: res.text };
+				}
 			} catch (err) {
+				if (ctx.signal?.aborted) return fail("ImageGenerationAborted");
+				if (timedOut) return fail(timeoutFailure);
 				return fail(`ImageGenerationNetworkError: ${err instanceof Error ? err.message : String(err)}`);
+			} finally {
+				clearTimeout(timer);
+				ctx.signal?.removeEventListener("abort", onCallerAbort);
 			}
 
 			if (response.status >= 400) {
 				return fail(`ImageGenerationProviderError: HTTP ${response.status}: ${response.text.slice(0, 500)}`);
 			}
 			if (ctx.signal?.aborted) return fail("ImageGenerationAborted");
-			if (Date.now() > deadline) return fail("ImageGenerationTimeout: generation exceeded 5 minutes");
+			if (timedOut) return fail(timeoutFailure);
 
 			let parsed: { data?: unknown };
 			try {
@@ -397,7 +431,6 @@ export function openAgentImageGenerateTool(
 			}
 
 			if (ctx.signal?.aborted) return fail("ImageGenerationAborted");
-			if (Date.now() > deadline) return fail("ImageGenerationTimeout: generation exceeded 5 minutes");
 
 			let path = oaUniqueRootImagePath(app, args.desiredName, "png");
 			try {

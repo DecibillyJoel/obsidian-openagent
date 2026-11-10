@@ -313,13 +313,17 @@ export function openAgentImageRegionTool(app: App, kind: "snip" | "blot"): ToolD
 			required: ["sourceImagePath", "left", "top", "right", "bottom", "desiredName"],
 			additionalProperties: false,
 		},
-		async run(args) {
+		async run(args, ctx) {
 			const nameError = oaValidateDesiredName(args.desiredName);
 			if (nameError) return fail(nameError);
 			const color = isSnip ? null : oaNormalizeHexColor(args.hexColor);
 			if (!isSnip && !color) {
 				return fail("InvalidHexColor: hexColor must contain exactly six hexadecimal digits, with an optional leading #");
 			}
+
+			// Abort before source resolution and rendering: a cancelled call must not read,
+			// render, or encode the source, and must report the abort rather than a path error.
+			if (ctx.signal?.aborted) return fail("ImageRegionAborted");
 
 			let source: OaRegionSource;
 			try {
@@ -338,6 +342,8 @@ export function openAgentImageRegionTool(app: App, kind: "snip" | "blot"): ToolD
 			} catch (err) {
 				return fail(`ImageProcessingError: ${err instanceof Error ? err.message : String(err)}`);
 			}
+
+			if (ctx.signal?.aborted) return fail("ImageRegionAborted");
 
 			let path = oaUniqueRootImagePath(app, args.desiredName, "png");
 			try {

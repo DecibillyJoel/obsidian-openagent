@@ -240,15 +240,23 @@ describe("oaImageUrlToPngDataUrl", () => {
 });
 
 describe("oaToImageUrlPart", () => {
-	it("wraps a converted PNG data URL in an image_url part", async () => {
-		expect(await oaToImageUrlPart(PNG_DATA_URL)).toEqual({
-			type: "image_url",
-			image_url: { url: PNG_DATA_URL },
+	it("normalises a converted PNG data URL", async () => {
+		expect(await oaToImageUrlPart(PNG_DATA_URL)).toEqual({ url: PNG_DATA_URL });
+	});
+
+	it("reports a failed download instead of dropping the image", async () => {
+		requestUrlMock.mockResolvedValueOnce({ status: 404, arrayBuffer: new ArrayBuffer(0) });
+		expect(await oaToImageUrlPart("https://example.test/broken.png")).toEqual({
+			url: "",
+			error: "ImageNormalizationFailed",
 		});
 	});
 
-	it("returns null for anything that cannot be converted", async () => {
-		expect(await oaToImageUrlPart("file:///a.png")).toBeNull();
-		expect(await oaToImageUrlPart("data:image/png;base64,=")).toBeNull();
+	it("returns an empty url with an error for anything that cannot be converted", async () => {
+		expect(await oaToImageUrlPart("file:///a.png")).toEqual({ url: "", error: "ImageNormalizationFailed" });
+		expect(await oaToImageUrlPart("data:image/png;base64,=")).toEqual({
+			url: "",
+			error: "ImageNormalizationFailed",
+		});
 	});
 });

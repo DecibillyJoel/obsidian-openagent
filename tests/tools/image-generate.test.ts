@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
 	class MockTFile {
@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => {
 	}
 	return {
 		MockTFile,
-		requestUrl: vi.fn(async () => ({ status: 200, json: { data: [] }, text: "" })),
+		requestUrlMock: vi.fn(),
 	};
 });
 
@@ -18,10 +18,10 @@ vi.mock("obsidian", () => ({
 	App: class App {},
 	TFile: mocks.MockTFile,
 	normalizePath: (path: string) => path.replace(/\\/g, "/"),
-	requestUrl: mocks.requestUrl,
+	requestUrl: mocks.requestUrlMock,
 }));
 
-import { requestUrl, type App } from "obsidian";
+import { type App } from "obsidian";
 import {
 	oaBase64ToBuffer,
 	oaCollectGenerationReferences,
@@ -31,6 +31,7 @@ import {
 	oaSanitizeGeneratedImages,
 	oaUniqueRootImagePath,
 	openAgentImageGenerateTool,
+	OA_IMAGE_GENERATION_TIMEOUT_MS,
 } from "../../src/tools/image-generate";
 import { oaBufferToDataUrl } from "../../src/images/data-url";
 import type { PluginSettings } from "../../src/settings";
@@ -38,6 +39,21 @@ import type { PluginSettings } from "../../src/settings";
 const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const PNG_B64 = "iVBORw0KGgo=";
 const PNG_DATA_URL = `data:image/png;base64,${PNG_B64}`;
+
+afterEach(() => {
+	vi.unstubAllGlobals();
+	vi.useRealTimers();
+	mocks.requestUrlMock.mockReset();
+});
+
+function stubGenerationResponse(
+	text = JSON.stringify({ data: [{ b64_json: PNG_B64 }] }),
+	status = 200,
+): ReturnType<typeof vi.fn> {
+	const fetchMock = vi.fn(async () => ({ status, text: async () => text }));
+	vi.stubGlobal("fetch", fetchMock);
+	return fetchMock;
+}
 
 function pngReferenceBytes(width: number, height: number): Uint8Array {
 	const bytes = new Uint8Array(24);
@@ -48,8 +64,6 @@ function pngReferenceBytes(width: number, height: number): Uint8Array {
 	bytes.set([(height >>> 24) & 0xff, (height >>> 16) & 0xff, (height >>> 8) & 0xff, height & 0xff], 20);
 	return bytes;
 }
-
-const requestUrlMock = requestUrl as unknown as ReturnType<typeof vi.fn>;
 
 function createApp(options?: {
 	children?: string[];
@@ -327,15 +341,11 @@ describe("openAgentImageGenerateTool", () => {
 	});
 
 	it("always requests PNG output and saves the generated image as PNG", async () => {
-		requestUrlMock.mockResolvedValueOnce({
-			status: 200,
-			json: {},
-			text: JSON.stringify({ data: [{ b64_json: PNG_B64 }] }),
-		});
+		const fetchMock = stubGenerationResponse();
 		const tool = openAgentImageGenerateTool(createApp(), () => settings());
 		const result = await tool.run({ operation: "generate", prompt: "a cat", desiredName: "cat" }, {});
 		const body = JSON.parse(
-			(requestUrlMock.mock.calls.at(-1)?.[0] as { body: string }).body,
+			(fetchMock.mock.calls.at(-1)?.[1] as { body: string }).body,
 		) as { output_format?: string };
 		expect(body.output_format).toBe("png");
 		expect(result).toEqual({
@@ -345,11 +355,7 @@ describe("openAgentImageGenerateTool", () => {
 	});
 
 	it("derives the aspect ratio and resolution tier from the first source", async () => {
-		requestUrlMock.mockResolvedValueOnce({
-			status: 200,
-			json: {},
-			text: JSON.stringify({ data: [{ b64_json: PNG_B64 }] }),
-		});
+		const fetchMock = stubGenerationResponse();
 		const app = createApp({ files: { "img/a.png": { size: 24, bytes: pngReferenceBytes(1920, 1080) } } });
 		const tool = openAgentImageGenerateTool(app, () => settings());
 		await tool.run(
@@ -357,33 +363,25 @@ describe("openAgentImageGenerateTool", () => {
 			{},
 		);
 		const body = JSON.parse(
-			(requestUrlMock.mock.calls.at(-1)?.[0] as { body: string }).body,
+			(fetchMock.mock.calls.at(-1)?.[1] as { body: string }).body,
 		) as { aspect_ratio?: string; resolution?: string };
 		expect(body.aspect_ratio).toBe("16:9");
 		expect(body.resolution).toBe("2K");
 	});
 
 	it("sends conservative geometry defaults without a source", async () => {
-		requestUrlMock.mockResolvedValueOnce({
-			status: 200,
-			json: {},
-			text: JSON.stringify({ data: [{ b64_json: PNG_B64 }] }),
-		});
+		const fetchMock = stubGenerationResponse();
 		const tool = openAgentImageGenerateTool(createApp(), () => settings());
 		await tool.run({ operation: "generate", prompt: "a cat", desiredName: "cat" }, {});
 		const body = JSON.parse(
-			(requestUrlMock.mock.calls.at(-1)?.[0] as { body: string }).body,
+			(fetchMock.mock.calls.at(-1)?.[1] as { body: string }).body,
 		) as { aspect_ratio?: string; resolution?: string };
 		expect(body.aspect_ratio).toBe("1:1");
 		expect(body.resolution).toBe("1K");
 	});
 
 	it("honors explicit userRequested overrides exactly", async () => {
-		requestUrlMock.mockResolvedValueOnce({
-			status: 200,
-			json: {},
-			text: JSON.stringify({ data: [{ b64_json: PNG_B64 }] }),
-		});
+		const fetchMock = stubGenerationResponse();
 		const app = createApp({ files: { "img/a.png": { size: 24, bytes: pngReferenceBytes(1920, 1080) } } });
 		const tool = openAgentImageGenerateTool(app, () => settings());
 		await tool.run(
@@ -399,7 +397,7 @@ describe("openAgentImageGenerateTool", () => {
 			{},
 		);
 		const body = JSON.parse(
-			(requestUrlMock.mock.calls.at(-1)?.[0] as { body: string }).body,
+			(fetchMock.mock.calls.at(-1)?.[1] as { body: string }).body,
 		) as { aspect_ratio?: string; resolution?: string; quality?: string };
 		expect(body.aspect_ratio).toBe("1:1");
 		expect(body.resolution).toBe("4K");
@@ -475,11 +473,7 @@ describe("openAgentImageGenerateTool", () => {
 	});
 
 	it("saves the generated image at the vault root and returns its path", async () => {
-		requestUrlMock.mockResolvedValueOnce({
-			status: 200,
-			json: {},
-			text: JSON.stringify({ data: [{ b64_json: PNG_B64 }] }),
-		});
+		const fetchMock = stubGenerationResponse();
 		const app = createApp();
 		const tool = openAgentImageGenerateTool(app, () => settings());
 		const result = await tool.run({ operation: "generate", prompt: "a cat", desiredName: "cat" }, {});
@@ -497,17 +491,14 @@ describe("openAgentImageGenerateTool", () => {
 				prompt: "a cat",
 			},
 		});
-		expect(requestUrlMock).toHaveBeenCalledWith(
-			expect.objectContaining({ url: "https://gateway.example/v1/images", method: "POST" }),
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://gateway.example/v1/images",
+			expect.objectContaining({ method: "POST" }),
 		);
 	});
 
 	it("sends an edit source image and reports the reference names", async () => {
-		requestUrlMock.mockResolvedValueOnce({
-			status: 200,
-			json: {},
-			text: JSON.stringify({ data: [{ b64_json: PNG_B64 }] }),
-		});
+		const fetchMock = stubGenerationResponse();
 		const app = createApp({ files: { "img/a.png": { size: 8, bytes: PNG_BYTES } } });
 		const tool = openAgentImageGenerateTool(app, () => settings());
 		const result = await tool.run(
@@ -529,7 +520,7 @@ describe("openAgentImageGenerateTool", () => {
 			},
 		});
 		const body = JSON.parse(
-			(requestUrlMock.mock.calls.at(-1)?.[0] as { body: string }).body,
+			(fetchMock.mock.calls.at(-1)?.[1] as { body: string }).body,
 		) as { input_references?: unknown[] };
 		expect(body.input_references).toHaveLength(1);
 	});
@@ -548,12 +539,120 @@ describe("openAgentImageGenerateTool", () => {
 	});
 
 	it("reports a provider error for HTTP failures", async () => {
-		requestUrlMock.mockResolvedValueOnce({ status: 500, json: {}, text: "boom" });
+		stubGenerationResponse("boom", 500);
 		const tool = openAgentImageGenerateTool(createApp(), () => settings());
 		const result = await tool.run({ operation: "generate", prompt: "a cat", desiredName: "cat" }, {});
 		expect(result).toEqual({
 			ok: false,
 			error: "ImageGenerationProviderError: HTTP 500: boom",
 		});
+	});
+});
+
+describe("openAgentImageGenerateTool cancellation", () => {
+	function createBinarySpy(app: App): ReturnType<typeof vi.fn> {
+		return (app.vault as unknown as { createBinary: ReturnType<typeof vi.fn> }).createBinary;
+	}
+
+	it("passes the signal to the image-generation request and stops on abort", async () => {
+		const fetchMock = stubGenerationResponse();
+		const controller = new AbortController();
+		const app = createApp();
+		const createBinary = createBinarySpy(app);
+		const tool = openAgentImageGenerateTool(app, () => settings());
+		const promise = tool.run(
+			{ operation: "generate", prompt: "a cat", desiredName: "cat" },
+			{ signal: controller.signal },
+		);
+		controller.abort();
+		expect(await promise).toMatchObject({ ok: false, error: "ImageGenerationAborted" });
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(createBinary).not.toHaveBeenCalled();
+	});
+
+	it("links the caller signal to a controller and detaches the listener", async () => {
+		const fetchMock = stubGenerationResponse();
+		const controller = new AbortController();
+		const removeSpy = vi.spyOn(controller.signal, "removeEventListener");
+		const tool = openAgentImageGenerateTool(createApp(), () => settings());
+		await tool.run(
+			{ operation: "generate", prompt: "a cat", desiredName: "cat" },
+			{ signal: controller.signal },
+		);
+		const init = fetchMock.mock.calls.at(-1)?.[1] as { signal?: AbortSignal };
+		expect(init.signal).toBeInstanceOf(AbortSignal);
+		expect(init.signal).not.toBe(controller.signal);
+		expect(init.signal?.aborted).toBe(false);
+		expect(removeSpy).toHaveBeenCalledWith("abort", expect.any(Function));
+	});
+
+	it("times out the pending request and never writes a file", async () => {
+		vi.useFakeTimers();
+		const fetchMock = vi.fn(
+			(_url: string, init: { signal?: AbortSignal }) =>
+				new Promise((_resolve, reject) => {
+					init.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+				}),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		const app = createApp();
+		const createBinary = createBinarySpy(app);
+		const tool = openAgentImageGenerateTool(app, () => settings());
+		const promise = tool.run({ operation: "generate", prompt: "a cat", desiredName: "cat" }, {});
+		await vi.advanceTimersByTimeAsync(OA_IMAGE_GENERATION_TIMEOUT_MS);
+		const result = await promise;
+		expect(result.ok).toBe(false);
+		if (result.ok) throw new Error("unreachable");
+		expect(result.error).toBe(
+			`ImageGenerationTimeout: image generation exceeded ${OA_IMAGE_GENERATION_TIMEOUT_MS / 1000} seconds`,
+		);
+		expect(createBinary).not.toHaveBeenCalled();
+	});
+
+	it("fails a late requestUrl response without writing a file", async () => {
+		vi.useFakeTimers();
+		vi.stubGlobal("fetch", undefined);
+		let resolveRequest: (value: { status: number; text: string }) => void = () => undefined;
+		mocks.requestUrlMock.mockReturnValue(
+			new Promise((resolve) => {
+				resolveRequest = resolve;
+			}),
+		);
+		const app = createApp();
+		const createBinary = createBinarySpy(app);
+		const tool = openAgentImageGenerateTool(app, () => settings());
+		const promise = tool.run({ operation: "generate", prompt: "a cat", desiredName: "cat" }, {});
+		await vi.advanceTimersByTimeAsync(OA_IMAGE_GENERATION_TIMEOUT_MS);
+		resolveRequest({ status: 200, text: JSON.stringify({ data: [{ b64_json: PNG_B64 }] }) });
+		const result = await promise;
+		expect(result.ok).toBe(false);
+		if (result.ok) throw new Error("unreachable");
+		expect(result.error).toBe(
+			`ImageGenerationTimeout: image generation exceeded ${OA_IMAGE_GENERATION_TIMEOUT_MS / 1000} seconds`,
+		);
+		expect(createBinary).not.toHaveBeenCalled();
+	});
+
+	it("falls back to requestUrl when fetch is unavailable", async () => {
+		vi.stubGlobal("fetch", undefined);
+		mocks.requestUrlMock.mockResolvedValue({
+			status: 200,
+			text: JSON.stringify({ data: [{ b64_json: PNG_B64 }] }),
+		});
+		const app = createApp();
+		const createBinary = createBinarySpy(app);
+		const tool = openAgentImageGenerateTool(app, () => settings());
+		const result = await tool.run({ operation: "generate", prompt: "a cat", desiredName: "cat" }, {});
+		expect(result.ok).toBe(true);
+		expect(mocks.requestUrlMock).toHaveBeenCalledTimes(1);
+		const request = mocks.requestUrlMock.mock.calls[0][0] as {
+			url: string;
+			method: string;
+			body: string;
+		};
+		expect(request.url).toBe("https://gateway.example/v1/images");
+		expect(request.method).toBe("POST");
+		expect(JSON.parse(request.body)).toMatchObject({ prompt: "a cat", output_format: "png" });
+		expect(createBinary).toHaveBeenCalledTimes(1);
 	});
 });

@@ -350,3 +350,41 @@ describe("image region tool rendering", () => {
 		);
 	});
 });
+
+describe("openAgentImageRegionTool cancellation", () => {
+	async function runRegionTool(ctx: { signal?: AbortSignal }) {
+		const { app, createBinary } = createApp({ files: { "photo.png": { size: 100, bytes: PNG_BYTES } } });
+		stubImageEnvironment();
+		const tool = openAgentImageRegionTool(app, "snip");
+		const result = await tool.run(baseArgs, ctx);
+		return { result, createBinary };
+	}
+
+	it("reports the abort before it resolves the source path", async () => {
+		const { app, createBinary } = createApp();
+		const decodeSpy = vi.fn(async () => ({ width: 10, height: 10, close: () => undefined }));
+		vi.stubGlobal("createImageBitmap", decodeSpy);
+		const controller = new AbortController();
+		controller.abort();
+		const tool = openAgentImageRegionTool(app, "snip");
+		const result = await tool.run(
+			{ ...baseArgs, sourceImagePath: "missing.png" },
+			{ signal: controller.signal },
+		);
+		expect(result.ok).toBe(false);
+		if (result.ok) throw new Error("unreachable");
+		expect(result.error).toBe("ImageRegionAborted");
+		expect(decodeSpy).not.toHaveBeenCalled();
+		expect(createBinary).not.toHaveBeenCalled();
+	});
+
+	it("writes no file when the region tool is cancelled", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		const { result, createBinary } = await runRegionTool({ signal: controller.signal });
+		expect(result.ok).toBe(false);
+		if (result.ok) throw new Error("unreachable");
+		expect(result.error).toBe("ImageRegionAborted");
+		expect(createBinary).not.toHaveBeenCalled();
+	});
+});
