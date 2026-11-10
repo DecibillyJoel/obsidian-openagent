@@ -195,6 +195,14 @@ async function oaRenderRegion(
 	args: Pick<ImageRegionArgs, "left" | "top" | "right" | "bottom">,
 	options: OaRegionRenderOptions,
 ): Promise<OaRenderedRegion> {
+	// Refuse a decompression bomb from the header, before the decoder allocates pixels.
+	// An unsniffable source falls back to the post-decode check below.
+	const sniffed = oaSniffImageDimensions(new Uint8Array(source.bytes));
+	if (sniffed && sniffed.width * sniffed.height > OA_MAX_REGION_PIXELS) {
+		throw new Error(
+			`ImageDimensionsTooLarge: ${sniffed.width}x${sniffed.height} exceeds the 40 megapixel processing limit`,
+		);
+	}
 	const decoded = await oaDecodeRegionSource(source.bytes, source.mimeType);
 	try {
 		if (decoded.width <= 0 || decoded.height <= 0 || decoded.width * decoded.height > OA_MAX_REGION_PIXELS) {

@@ -26,6 +26,18 @@ import {
 
 const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
+// A minimal PNG prefix that carries the IHDR width and height the sniffer reads.
+function pngWithHeaderDimensions(width: number, height: number): Uint8Array {
+	const bytes = new Uint8Array(33);
+	bytes.set(PNG_BYTES, 0);
+	bytes.set([0x00, 0x00, 0x00, 0x0d], 8);
+	bytes.set([0x49, 0x48, 0x44, 0x52], 12);
+	const view = new DataView(bytes.buffer);
+	view.setUint32(16, width);
+	view.setUint32(20, height);
+	return bytes;
+}
+
 const SNIP_DESCRIPTION =
 	"Crop an existing vault image to an exact pixel region and save the crop as a new PNG at the vault root. Coordinates are pixel edges: left/top are inclusive and right/bottom are exclusive. The region must be ordered and entirely inside the source image. Supports PNG, JPEG, WebP, and GIF sources; an animated GIF is processed as a still frame. desiredName must omit its extension or end in `.png`. Existing files are never overwritten.";
 
@@ -248,6 +260,24 @@ describe("image region tool errors", () => {
 		expect(result.ok).toBe(false);
 		if (result.ok) throw new Error("unreachable");
 		expect(result.error).toBe("ImageTooLarge: big.png exceeds the 64 MB processing limit");
+	});
+
+	it("rejects a source header above the pixel limit before decoding and writes no file", async () => {
+		const { app, createBinary } = createApp({
+			files: { "huge.png": { size: 1000, bytes: pngWithHeaderDimensions(9000, 9000) } },
+		});
+		const decodeSpy = vi.fn(async () => ({ width: 9000, height: 9000, close: () => undefined }));
+		vi.stubGlobal("createImageBitmap", decodeSpy);
+		vi.stubGlobal("OffscreenCanvas", MockOffscreenCanvas);
+		const tool = openAgentImageRegionTool(app, "snip");
+		const result = await tool.run({ ...baseArgs, sourceImagePath: "huge.png" }, {});
+		expect(result.ok).toBe(false);
+		if (result.ok) throw new Error("unreachable");
+		expect(result.error).toBe(
+			"ImageProcessingError: ImageDimensionsTooLarge: 9000x9000 exceeds the 40 megapixel processing limit",
+		);
+		expect(decodeSpy).not.toHaveBeenCalled();
+		expect(createBinary).not.toHaveBeenCalled();
 	});
 });
 

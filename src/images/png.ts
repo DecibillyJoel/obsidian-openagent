@@ -6,9 +6,27 @@ import {
 	OA_MAX_PNG_BYTES,
 } from "./constants";
 import { oaBufferToDataUrl, oaDataUrlToBytes } from "./data-url";
+import { oaSniffImageDimensions } from "./mime";
 
 const DATA_URL_IMAGE_PATTERN = /^data:image\/[^;,]+;base64,([\s\S]+)$/i;
 const DESIRED_NAME_PATTERN = /\.([A-Za-z0-9]{1,8})$/;
+
+// Pixel-count cap applied from the header, before any decoder allocates a buffer.
+// The value matches the region tool limit, so one image is never decodable in one
+// path and refused in the other.
+export const OA_MAX_DECODE_PIXELS = 40 * 1024 * 1024;
+
+/** Thrown when an image declares more pixels than the pre-decode limit allows. */
+export class PixelLimitError extends Error {
+	constructor(width: number, height: number) {
+		super(`ImageDimensionsTooLarge: ${width}x${height} exceeds the 40 megapixel processing limit`);
+		this.name = "PixelLimitError";
+	}
+}
+
+function oaAssertPixelLimit(width: number, height: number): void {
+	if (width * height > OA_MAX_DECODE_PIXELS) throw new PixelLimitError(width, height);
+}
 
 const CANVAS_CONTEXT_ERROR = "PNG conversion could not create a canvas context";
 const CANVAS_BLOB_ERROR = "Canvas did not produce PNG data";
@@ -63,6 +81,7 @@ export async function oaBytesToPng(
 	width: number,
 	height: number,
 ): Promise<Uint8Array> {
+	oaAssertPixelLimit(width, height);
 	if (typeof OffscreenCanvas !== "undefined") {
 		const canvas = new OffscreenCanvas(width, height);
 		const context = canvas.getContext("2d");
@@ -131,6 +150,10 @@ async function oaDecodeImageSource(bytes: Uint8Array): Promise<OaDecodedImage | 
 }
 
 export async function oaDecodeImageToPng(bytes: Uint8Array): Promise<Uint8Array> {
+	// Refuse a decompression bomb from the header, before the decoder allocates pixels.
+	// An unsniffable format yields no dimensions, so it decodes as before.
+	const dimensions = oaSniffImageDimensions(bytes);
+	if (dimensions) oaAssertPixelLimit(dimensions.width, dimensions.height);
 	const mime = oaMimeFromBytes(bytes);
 	if (mime === "image/png") return bytes;
 	if (!mime || !OA_IMAGE_MIMES.has(mime)) throw new Error(UNSUPPORTED_BYTES_ERROR);

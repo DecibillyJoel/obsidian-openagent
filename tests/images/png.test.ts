@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { requestUrl } from "obsidian";
 import {
+	PixelLimitError,
 	oaBytesToPng,
 	oaDecodeImageToPng,
 	oaImageUrlToPngDataUrl,
@@ -15,6 +16,29 @@ const PNG_DATA_URL = `data:image/png;base64,${oaBufferToDataUrl(PNG_BYTES, "imag
 const JPEG_BYTES = new Uint8Array([0xff, 0xd8, 0xff, 0xe0]);
 
 const requestUrlMock = requestUrl as unknown as ReturnType<typeof vi.fn>;
+
+// A minimal PNG prefix that carries the IHDR width and height the sniffer reads.
+function pngWithHeaderDimensions(width: number, height: number): Uint8Array {
+	const bytes = new Uint8Array(33);
+	bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+	bytes.set([0x00, 0x00, 0x00, 0x0d], 8);
+	bytes.set([0x49, 0x48, 0x44, 0x52], 12);
+	const view = new DataView(bytes.buffer);
+	view.setUint32(16, width);
+	view.setUint32(20, height);
+	return bytes;
+}
+
+// A minimal JPEG prefix that carries a start-of-frame segment with the dimensions.
+function jpegWithFrameDimensions(width: number, height: number): Uint8Array {
+	const bytes = new Uint8Array(24);
+	bytes.set([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08], 0);
+	bytes[7] = (height >> 8) & 0xff;
+	bytes[8] = height & 0xff;
+	bytes[9] = (width >> 8) & 0xff;
+	bytes[10] = width & 0xff;
+	return bytes;
+}
 
 class MockOffscreenCanvas {
 	constructor(
@@ -91,6 +115,13 @@ describe("oaBytesToPng", () => {
 		);
 	});
 
+	it("refuses to encode beyond the pixel limit", async () => {
+		vi.stubGlobal("OffscreenCanvas", MockOffscreenCanvas);
+		await expect(oaBytesToPng({} as CanvasImageSource, 9000, 9000)).rejects.toThrow(
+			PixelLimitError,
+		);
+	});
+
 	it("throws when the canvas does not produce PNG data", async () => {
 		vi.stubGlobal(
 			"OffscreenCanvas",
@@ -127,6 +158,37 @@ describe("oaDecodeImageToPng", () => {
 	it("rejects unsupported bytes", async () => {
 		await expect(oaDecodeImageToPng(new Uint8Array([1, 2, 3]))).rejects.toThrow(
 			"Unsupported image bytes; expected PNG, JPEG, WebP, or GIF",
+		);
+	});
+
+	it("refuses an image whose header declares too many pixels, before decoding", async () => {
+		const decodeSpy = vi.fn(async () => ({ width: 9000, height: 9000 }));
+		vi.stubGlobal("createImageBitmap", decodeSpy);
+		vi.stubGlobal("OffscreenCanvas", MockOffscreenCanvas);
+		await expect(oaDecodeImageToPng(pngWithHeaderDimensions(9000, 9000))).rejects.toThrow(
+			PixelLimitError,
+		);
+		expect(decodeSpy).not.toHaveBeenCalled();
+	});
+
+	it("refuses a large JPEG frame header before decoding", async () => {
+		const decodeSpy = vi.fn(async () => ({ width: 9000, height: 9000 }));
+		vi.stubGlobal("createImageBitmap", decodeSpy);
+		vi.stubGlobal("OffscreenCanvas", MockOffscreenCanvas);
+		await expect(oaDecodeImageToPng(jpegWithFrameDimensions(9000, 9000))).rejects.toThrow(
+			PixelLimitError,
+		);
+		expect(decodeSpy).not.toHaveBeenCalled();
+	});
+
+	it("decodes an image inside the limit", async () => {
+		vi.stubGlobal("OffscreenCanvas", MockOffscreenCanvas);
+		vi.stubGlobal(
+			"createImageBitmap",
+			vi.fn(async () => ({ width: 100, height: 100 })),
+		);
+		await expect(oaDecodeImageToPng(pngWithHeaderDimensions(100, 100))).resolves.toBeInstanceOf(
+			Uint8Array,
 		);
 	});
 
