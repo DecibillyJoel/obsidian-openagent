@@ -12,6 +12,8 @@ import {
 	type StreamOptions,
 } from "./types";
 import type { OpenAICompatibleConfig } from "./provider-config";
+import { oaStreamChatDeltas } from "./streaming/chat-stream";
+import { oaReasoningDetailText } from "./streaming/reasoning";
 
 interface ToolCallBuffer {
 	id: string;
@@ -36,12 +38,63 @@ export class OpenAICompatibleProvider implements ModelProvider {
 			"Content-Type": "application/json",
 			Authorization: `Bearer ${this.config.apiKey}`,
 		};
+		const imageMode = oaImageOutputModels.has(this.config.model);
 
 		let responseText = "";
 		let responseStatus = 0;
 		let degraded = false;
+		// After the first streamed delta the requestUrl fallback must not run.
+		// A second request would bill the user twice.
+		let sawDelta = false;
 		try {
-			const imageMode = oaImageOutputModels.has(this.config.model);
+			if (typeof fetch === "function") {
+				try {
+					const response = await fetch(url, {
+						method: "POST",
+						headers,
+						body: completionBody(this.config.model, messages, tools, opts.responseFormat, imageMode, true),
+						signal: opts.signal,
+					});
+					if (opts.signal?.aborted) return;
+					const contentType = response.headers.get("content-type") ?? "";
+					if (response.ok && response.body && contentType.includes("text/event-stream")) {
+						let emittedReasoning = "";
+						let finishReason: string | undefined;
+						for await (const delta of oaStreamChatDeltas(response.body)) {
+							sawDelta = true;
+							if (delta.reasoning !== undefined) {
+								emittedReasoning += delta.reasoning;
+								yield { kind: "thinking_text", text: delta.reasoning };
+							}
+							if (delta.reasoningDetails) {
+								const detailText = oaReasoningDetailText(delta.reasoningDetails);
+								if (detailText.length > 0 && !emittedReasoning.includes(detailText)) {
+									emittedReasoning += detailText;
+									yield { kind: "thinking_text", text: detailText };
+								}
+							}
+							if (delta.content !== undefined) {
+								yield { kind: "text", text: delta.content };
+							}
+							if (delta.images && delta.images.length > 0) {
+								yield { kind: "images", urls: delta.images };
+							}
+							if (delta.toolCalls && delta.toolCalls.length > 0) {
+								yield { kind: "tool_call_assembled", calls: delta.toolCalls };
+							}
+							if (delta.finishReason !== undefined) finishReason = delta.finishReason;
+						}
+						if (opts.signal?.aborted) return;
+						yield { kind: "done", finishReason: mapFinishReason(finishReason) };
+						return;
+					}
+				} catch (err) {
+					if (isAbortError(err) || opts.signal?.aborted) return;
+					// Bytes already arrived: report the error instead of billing a second request.
+					if (sawDelta) throw err;
+				}
+			}
+
 			const primary = await requestCompletion(
 				url,
 				headers,
@@ -131,14 +184,7 @@ async function requestCompletion(
 	responseFormat?: StreamOptions["responseFormat"],
 	imageMode = false,
 ): Promise<{ status: number; text: string }> {
-	const body = JSON.stringify({
-		model,
-		messages,
-		stream: false,
-		...(tools ? { tools, tool_choice: "auto" } : {}),
-		...(responseFormat ? { response_format: responseFormat } : {}),
-		...(imageMode ? { modalities: ["text", "image"] } : {}),
-	});
+	const body = completionBody(model, messages, tools, responseFormat, imageMode, false);
 	const response = await requestUrl({
 		url,
 		method: "POST",
@@ -148,6 +194,24 @@ async function requestCompletion(
 		throw: false,
 	});
 	return { status: response.status, text: response.text };
+}
+
+function completionBody(
+	model: string,
+	messages: ChatMessage[],
+	tools: OpenAiToolSpec[] | undefined,
+	responseFormat: StreamOptions["responseFormat"],
+	imageMode: boolean,
+	stream: boolean,
+): string {
+	return JSON.stringify({
+		model,
+		messages,
+		stream,
+		...(tools ? { tools, tool_choice: "auto" } : {}),
+		...(responseFormat ? { response_format: responseFormat } : {}),
+		...(imageMode ? { modalities: ["text", "image"] } : {}),
+	});
 }
 
 function mapHttpError(status: number, text: string): Error {

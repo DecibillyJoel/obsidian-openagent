@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { requestUrlMock } = vi.hoisted(() => ({
+const { requestUrlMock, fetchMock } = vi.hoisted(() => ({
 	requestUrlMock: vi.fn(),
+	fetchMock: vi.fn(),
 }));
 
 vi.mock("obsidian", () => ({
@@ -13,10 +14,49 @@ import {
 	oaModelEligibleOrUnknown,
 	OpenAICompatibleProvider,
 } from "../src/provider";
+import { NetworkError, type ChatMessage, type ModelProvider, type StreamEvent } from "../src/types";
+import { oaSseResponse } from "./setup";
+
+function makeProvider(): ModelProvider {
+	return new OpenAICompatibleProvider({
+		baseUrl: "https://api.example.test/v1",
+		apiKey: "key-1",
+		model: "test-model",
+	});
+}
+
+function makeMessages(): ChatMessage[] {
+	return [{ role: "user", content: "hi" }];
+}
+
+async function collectEvents(
+	provider: ModelProvider,
+	messages: ChatMessage[],
+	signal?: AbortSignal,
+): Promise<StreamEvent[]> {
+	const events: StreamEvent[] = [];
+	for await (const event of provider.stream(messages, signal ? { signal } : {})) events.push(event);
+	return events;
+}
+
+function completed(text: string) {
+	return { choices: [{ message: { content: text }, finish_reason: "stop" }] };
+}
+
+// Node ships a real fetch. Save it before any beforeEach runs, so a test can
+// prove the suite never reaches the network on it.
+const platformFetch = globalThis.fetch;
 
 describe("OpenAICompatibleProvider", () => {
 	beforeEach(() => {
 		requestUrlMock.mockReset();
+		globalThis.fetch = vi.fn(async () => {
+			throw new TypeError("fetch blocked in tests");
+		}) as unknown as typeof fetch;
+	});
+
+	it("never runs on the platform fetch", () => {
+		expect(globalThis.fetch).not.toBe(platformFetch);
 	});
 
 	it("emits assistant text from non-streaming completions", async () => {
@@ -323,5 +363,174 @@ describe("OpenAICompatibleProvider", () => {
 			{ kind: "text", text: '{"summary":"fallback","claims":[]}', degraded: true },
 			{ kind: "done", finishReason: "stop" },
 		]);
+	});
+});
+
+describe("streaming transport", () => {
+	beforeEach(() => {
+		fetchMock.mockReset();
+		fetchMock.mockResolvedValue(oaSseResponse([]));
+		globalThis.fetch = fetchMock as unknown as typeof fetch;
+	});
+
+	it("streams content deltas and never calls requestUrl", async () => {
+		fetchMock.mockResolvedValue(
+			oaSseResponse([
+				'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n',
+				'data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n',
+				'data: {"choices":[{"delta":{"content":"lo"}}]}\n\n',
+				'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+				"data: [DONE]\n\n",
+			]),
+		);
+		const events = await collectEvents(makeProvider(), makeMessages());
+		expect(events).toEqual([
+			{ kind: "text", text: "Hel" },
+			{ kind: "text", text: "lo" },
+			{ kind: "done", finishReason: "stop" },
+		]);
+		expect(requestUrlMock).not.toHaveBeenCalled();
+	});
+
+	it("sends stream true and the Authorization header", async () => {
+		fetchMock.mockResolvedValue(oaSseResponse(["data: [DONE]\n\n"]));
+		await collectEvents(makeProvider(), makeMessages());
+		const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+		expect(url).toBe("https://api.example.test/v1/chat/completions");
+		expect(init.method).toBe("POST");
+		expect((init.headers as Record<string, string>).Authorization).toBe("Bearer key-1");
+		expect(JSON.parse(String(init.body)).stream).toBe(true);
+	});
+
+	it("emits reasoning deltas once and drops the duplicate detail block", async () => {
+		fetchMock.mockResolvedValue(
+			oaSseResponse([
+				'data: {"choices":[{"delta":{"reasoning":"17 * 23"}}]}\n\n',
+				'data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"17 * 23","index":0}]}}]}\n\n',
+				'data: {"choices":[{"delta":{"content":"391"}}]}\n\n',
+				'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+				"data: [DONE]\n\n",
+			]),
+		);
+		expect(await collectEvents(makeProvider(), makeMessages())).toEqual([
+			{ kind: "thinking_text", text: "17 * 23" },
+			{ kind: "text", text: "391" },
+			{ kind: "done", finishReason: "stop" },
+		]);
+	});
+
+	it("emits a detail block that carries different text after a reasoning delta", async () => {
+		fetchMock.mockResolvedValue(
+			oaSseResponse([
+				'data: {"choices":[{"delta":{"reasoning":"17 * 23"}}]}\n\n',
+				'data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":" = 391","index":0}]}}]}\n\n',
+				'data: {"choices":[{"delta":{"content":"391"}}]}\n\n',
+				'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+				"data: [DONE]\n\n",
+			]),
+		);
+		expect(await collectEvents(makeProvider(), makeMessages())).toEqual([
+			{ kind: "thinking_text", text: "17 * 23" },
+			{ kind: "thinking_text", text: " = 391" },
+			{ kind: "text", text: "391" },
+			{ kind: "done", finishReason: "stop" },
+		]);
+	});
+
+	it("emits the detail block when no reasoning delta arrived", async () => {
+		fetchMock.mockResolvedValue(
+			oaSseResponse([
+				'data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","summary":"short","index":0}]}}]}\n\n',
+				'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+				"data: [DONE]\n\n",
+			]),
+		);
+		expect(await collectEvents(makeProvider(), makeMessages())).toEqual([
+			{ kind: "thinking_text", text: "short" },
+			{ kind: "done", finishReason: "stop" },
+		]);
+	});
+
+	it("assembles a streamed tool call", async () => {
+		fetchMock.mockResolvedValue(
+			oaSseResponse([
+				'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"vault_read","arguments":"{\\"path\\":"}}]}}]}\n\n',
+				'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"Notes/test.md\\"}"}}]}}]}\n\n',
+				'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+				"data: [DONE]\n\n",
+			]),
+		);
+		expect(await collectEvents(makeProvider(), makeMessages())).toEqual([
+			{
+				kind: "tool_call_assembled",
+				calls: [
+					{
+						id: "call_1",
+						name: "vault_read",
+						arguments: { path: "Notes/test.md" },
+						rawArguments: '{"path":"Notes/test.md"}',
+					},
+				],
+			},
+			{ kind: "done", finishReason: "tool_calls" },
+		]);
+	});
+
+	it("falls back to requestUrl when fetch is unavailable", async () => {
+		const original = globalThis.fetch;
+		// @ts-expect-error deliberately removing a global for the test
+		delete globalThis.fetch;
+		requestUrlMock.mockResolvedValue({ status: 200, text: JSON.stringify(completed("hello")) });
+		expect(await collectEvents(makeProvider(), makeMessages())).toEqual([
+			{ kind: "text", text: "hello" },
+			{ kind: "done", finishReason: "stop" },
+		]);
+		globalThis.fetch = original;
+	});
+
+	it("falls back to requestUrl when the content type is not event-stream", async () => {
+		fetchMock.mockResolvedValue(oaSseResponse(['{"choices":[]}'], { contentType: "application/json" }));
+		requestUrlMock.mockResolvedValue({ status: 200, text: JSON.stringify(completed("hello")) });
+		expect(await collectEvents(makeProvider(), makeMessages())).toEqual([
+			{ kind: "text", text: "hello" },
+			{ kind: "done", finishReason: "stop" },
+		]);
+	});
+
+	it("reports the error and does not re-request when the stream dies after bytes arrived", async () => {
+		fetchMock.mockResolvedValue(
+			oaSseResponse(['data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'], {
+				error: new Error("socket closed"),
+			}),
+		);
+		await expect(collectEvents(makeProvider(), makeMessages())).rejects.toThrow(NetworkError);
+		expect(requestUrlMock).not.toHaveBeenCalled();
+	});
+
+	it("returns quietly when the signal aborts mid-stream", async () => {
+		const controller = new AbortController();
+		let seenSignal: AbortSignal | null | undefined;
+		fetchMock.mockImplementation(async (_url: string, init: RequestInit) => {
+			seenSignal = init.signal as AbortSignal;
+			const encoder = new TextEncoder();
+			let sent = false;
+			const body = new ReadableStream<Uint8Array>({
+				pull(streamController) {
+					if (!sent) {
+						sent = true;
+						streamController.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"par"}}]}\n\n'));
+						return;
+					}
+					controller.abort();
+					streamController.error(new DOMException("Aborted", "AbortError"));
+				},
+			});
+			return { ok: true, body, headers: { get: () => "text/event-stream" } } as unknown as Response;
+		});
+		const events = await collectEvents(makeProvider(), makeMessages(), controller.signal);
+		expect(seenSignal).toBe(controller.signal);
+		expect(seenSignal?.aborted).toBe(true);
+		expect(events).toEqual([{ kind: "text", text: "par" }]);
+		expect(requestUrlMock).not.toHaveBeenCalled();
 	});
 });

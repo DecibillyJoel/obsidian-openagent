@@ -64,6 +64,7 @@ export interface AssembledToolCall {
 }
 
 export type StreamEvent =
+	// `text` carries one streamed delta, not the whole answer. Append it to the output.
 	| { kind: "text"; text: string; degraded?: boolean }
 	| { kind: "images"; urls: string[] }
 	| { kind: "thinking_text"; text: string }
