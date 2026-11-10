@@ -2,7 +2,7 @@ import { type App, TFile, TFolder } from "obsidian";
 import { type UndoBuffer } from "../../consent/undo";
 import { defineTool, fail, ok } from "../define";
 import { PathError, safeVaultPath } from "./path-safe";
-import { mergeFrontmatter, splitFrontmatter, stitchFrontmatter } from "./frontmatter";
+import { extractFrontmatterBlock, mergeFrontmatter, stitchFrontmatter } from "./frontmatter";
 import { NotAFolderError, ensureParentFolder, openAgentEnsureFolderPath } from "./ensure-folder";
 
 interface Args {
@@ -82,17 +82,15 @@ export function writeTool(app: App, undo: UndoBuffer) {
 			if (existing instanceof TFolder) return fail(`IsFolder: ${p}`);
 
 			let before: string | null = null;
-			let mergedFm: Record<string, unknown> = {};
+			let existingBlock = "";
 
 			if (existing instanceof TFile) {
 				before = await app.vault.read(existing);
-				const split = splitFrontmatter(before);
-				mergedFm = mergeFrontmatter(split.frontmatter ?? {}, args.frontmatter ?? {});
-			} else if (args.frontmatter) {
-				mergedFm = args.frontmatter;
+				existingBlock = extractFrontmatterBlock(before);
 			}
 
-			const after = stitchFrontmatter(mergedFm, body);
+			const mergedBlock = mergeFrontmatter(existingBlock, args.frontmatter ?? {});
+			const after = stitchFrontmatter(mergedBlock, body);
 
 			if (existing instanceof TFile) {
 				await app.vault.modify(existing, after);
