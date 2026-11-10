@@ -118,6 +118,7 @@ export interface JsonSchemaProperty {
 	maximum?: number;
 	minLength?: number;
 	maxLength?: number;
+	pattern?: string;
 }
 
 export interface JsonSchema {

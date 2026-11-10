@@ -63,6 +63,13 @@ describe("globToRegex leading ** command", () => {
 	});
 });
 
+describe("globToRegex literal characters", () => {
+	it("treats brackets and braces as literal characters in a glob", () => {
+		expect(globToRegex("[a]{b}.md").test("[a]{b}.md")).toBe(true);
+		expect(globToRegex("[a]{b}.md").test("a.md")).toBe(false);
+	});
+});
+
 describe("vault_list glob matching", () => {
 	it("includes root-level and nested Markdown files for **/*.md", async () => {
 		const app = makeApp(["Note.md", "Daily/", "Daily/Note.md", "a/b/Note.md", "readme.txt"]);

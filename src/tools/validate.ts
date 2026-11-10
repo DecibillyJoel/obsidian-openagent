@@ -87,6 +87,17 @@ function validateProp(value: unknown, schema: JsonSchemaProperty, path: string):
 		if (schema.maxLength !== undefined && value.length > schema.maxLength) {
 			return { ok: false, error: `field '${path}' must be at most ${schema.maxLength} chars` };
 		}
+		if (schema.pattern !== undefined) {
+			let re: RegExp | undefined = undefined;
+			try {
+				re = new RegExp(schema.pattern);
+			} catch {
+				re = undefined;
+			}
+			if (re !== undefined && !re.test(value)) {
+				return { ok: false, error: `field '${path}' must match pattern '${schema.pattern}'` };
+			}
+		}
 	}
 
 	return { ok: true, value: value as Record<string, unknown> };

@@ -84,7 +84,7 @@ function globToRegex(glob: string): RegExp {
 			re += "[^/]*";
 		} else if (c === "?") {
 			re += "[^/]";
-		} else if (".+()|^$\\".includes(c)) {
+		} else if (".+()|^$\\[]{}".includes(c)) {
 			re += "\\" + c;
 		} else {
 			re += c;

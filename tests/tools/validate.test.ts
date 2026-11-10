@@ -13,6 +13,20 @@ function schema(overrides: Partial<JsonSchema> = {}): JsonSchema {
 	};
 }
 
+describe("validateArgs pattern", () => {
+	it("rejects a value that fails a pattern", () => {
+		expect(
+			validateArgs({ name: "Nope" }, { type: "object", properties: { name: { type: "string", pattern: "^[a-z]+$" } } }).ok,
+		).toBe(false);
+	});
+
+	it("accepts a value that matches a pattern", () => {
+		expect(validateArgs({ name: "ok" }, { type: "object", properties: { name: { type: "string", pattern: "^[a-z]+$" } } }).ok).toBe(
+			true,
+		);
+	});
+});
+
 describe("validateArgs unknown fields", () => {
 	it("silently ignores unknown fields when additionalProperties is not declared", () => {
 		expect(validateArgs({ name: "cat", extra: true }, schema())).toEqual({
