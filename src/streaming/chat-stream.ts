@@ -1,4 +1,5 @@
 import type { AssembledToolCall } from "../types";
+import type { OaReasoningDetail } from "./reasoning";
 
 /** One streaming tool-call fragment. Vendors split a call across records. */
 export interface OaToolCallFragment {
@@ -6,14 +7,6 @@ export interface OaToolCallFragment {
 	id?: string;
 	name?: string;
 	arguments?: string;
-}
-
-/** One reasoning block. Task 2 owns the display parser for these blocks. */
-export interface OaReasoningDetail {
-	type: string;
-	text?: string;
-	summary?: string;
-	data?: string;
 }
 
 /** One stream record reduced to the fields the chat loop consumes. */
