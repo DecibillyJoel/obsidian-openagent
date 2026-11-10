@@ -1,11 +1,26 @@
 import { oaFetchModelIds } from "../provider";
 import { oaNewModelCategoryId, type ModelCategory, type ModelCategoryKind } from "./categories";
 
+export interface OaCategoriesSectionState {
+	noticeIds: Set<string>;
+	openIds: Set<string>;
+}
+
+export function oaNewCategoriesSectionState(): OaCategoriesSectionState {
+	return { noticeIds: new Set<string>(), openIds: new Set<string>() };
+}
+
 export interface ModelCategoriesSectionOptions {
 	getCategories(): ModelCategory[];
 	setCategories(next: ModelCategory[]): Promise<void>;
 	getEndpoint(): { baseUrl: string; apiKey: string };
 	onChanged(): void;
+	/**
+	 * The state that must outlive one render, and one call: which categories are
+	 * open, and which show a fetch notice. A caller that repaints the section
+	 * passes the same object to every call.
+	 */
+	state?: OaCategoriesSectionState;
 }
 
 const UNTITLED_NAME = "Untitled category";
@@ -28,14 +43,17 @@ function oaCountLabel(count: number): string {
  *
  * The section caches one catalog per kind, so the fetch of one category cannot
  * relabel the rows of a category of the other kind.
+ *
+ * State: which categories are open and which show a fetch notice lives in
+ * `options.state`, so a repaint keeps it. The section makes its own state when
+ * the caller passes none.
  */
 export function renderModelCategoriesSection(
 	container: HTMLElement,
 	options: ModelCategoriesSectionOptions,
 ): void {
 	const catalogs: Record<ModelCategoryKind, string[] | null> = { text: null, image: null };
-	const noticeIds = new Set<string>();
-	const openIds = new Set<string>();
+	const { noticeIds, openIds } = options.state ?? oaNewCategoriesSectionState();
 	const root = container.createDiv({ cls: "open-agent-categories" });
 
 	const render = (): void => {

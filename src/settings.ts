@@ -3,7 +3,7 @@ import type OpenAgentPlugin from "./main";
 import { DEFAULT_CONSENT, type ConsentSettings } from "./consent/manager";
 import { oaBuildModelOptionGroups, oaCatalogWithCurrent, type ModelCategory, type ModelCategoryKind } from "./models/categories";
 import { oaPaintModelSelect, type ModelSelectPseudoOption } from "./models/selectOptions";
-import { renderModelCategoriesSection } from "./models/categoriesSection";
+import { oaNewCategoriesSectionState, renderModelCategoriesSection } from "./models/categoriesSection";
 import { loadPacks } from "./packs/loader";
 import type { AgentPack } from "./packs/types";
 import { oaFetchModelIds, oaModelEligibleOrUnknown } from "./provider";
@@ -51,6 +51,8 @@ export function isConfigured(s: PluginSettings): boolean {
 export class OpenAgentSettingsTab extends PluginSettingTab {
 	private readonly plugin: OpenAgentPlugin;
 	private modelSelectPainters: Array<() => void> = [];
+	/** Outlives every paint of the tab, so an open category stays open. */
+	private readonly categoriesState = oaNewCategoriesSectionState();
 
 	constructor(app: App, plugin: OpenAgentPlugin) {
 		super(app, plugin);
@@ -159,6 +161,7 @@ export class OpenAgentSettingsTab extends PluginSettingTab {
 
 		new Setting(containerEl).setName("Model categories").setHeading();
 		renderModelCategoriesSection(containerEl, {
+			state: this.categoriesState,
 			getCategories: () => this.plugin.settings.modelCategories,
 			setCategories: async (next) => {
 				this.plugin.settings.modelCategories = next;

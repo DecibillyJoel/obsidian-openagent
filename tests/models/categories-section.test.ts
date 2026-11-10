@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockElement, requestUrlMock } from "../setup";
 import type { ModelCategory } from "../../src/models/categories";
-import { renderModelCategoriesSection } from "../../src/models/categoriesSection";
+import { oaNewCategoriesSectionState, renderModelCategoriesSection } from "../../src/models/categoriesSection";
 
 function findByClass(root: MockElement, className: string): MockElement[] {
 	const out: MockElement[] = [];
@@ -29,6 +29,52 @@ function setup(categories: ModelCategory[], container = new MockElement("div")) 
 
 function listIds(container: MockElement): string[] {
 	return findByClass(container, "open-agent-category-row-label").map((el) => el.textContent);
+}
+
+/** The root of the section as it was painted last, not an earlier one. */
+function currentRoot(container: MockElement): MockElement {
+	const roots = findByClass(container, "open-agent-categories");
+	return roots[roots.length - 1];
+}
+
+/**
+ * The mock element records no category id, and the section paints one
+ * `<details>` per category in `getCategories()` order, so the order of the last
+ * render maps an id to its element.
+ */
+let renderedIds: string[] = [];
+
+type DetailsElement = MockElement & { open?: boolean };
+
+function detailsOf(container: MockElement, id: string): DetailsElement {
+	const index = renderedIds.indexOf(id);
+	expect(index).toBeGreaterThanOrEqual(0);
+	return findByClass(currentRoot(container), "open-agent-category")[index] as DetailsElement;
+}
+
+function isCategoryOpen(container: MockElement, id: string): boolean {
+	return detailsOf(container, id).open === true;
+}
+
+/** The user expands the category: the browser sets `open`, then fires `toggle`. */
+function openCategory(container: MockElement, id: string): void {
+	const details = detailsOf(container, id);
+	details.open = true;
+	details.fire("toggle");
+}
+
+function renderSection(
+	container: MockElement,
+	options: { state: ReturnType<typeof oaNewCategoriesSectionState>; categories: ModelCategory[] },
+): void {
+	renderedIds = options.categories.map((category) => category.id);
+	renderModelCategoriesSection(container as unknown as HTMLElement, {
+		state: options.state,
+		getCategories: () => options.categories,
+		setCategories: async () => undefined,
+		getEndpoint: () => ({ baseUrl: "https://example.test/v1", apiKey: "token" }),
+		onChanged: () => undefined,
+	});
 }
 
 // The fetch handler is async, and `requestUrlMock` resolves at once, so a
@@ -68,6 +114,7 @@ const IMAGE_CATALOG = {
 };
 
 beforeEach(() => {
+	renderedIds = [];
 	requestUrlMock.mockResolvedValue({
 		status: 200,
 		text: JSON.stringify({ data: [] }),
@@ -206,6 +253,29 @@ describe("model categories section", () => {
 		const { container } = setup([{ id: "a", name: "A", kind: "text", models: [] }]);
 		expect(findByClass(container, "open-agent-category-add-kind")).toEqual([]);
 		expect(findByClass(container, "open-agent-category-kind")).toEqual([]);
+	});
+
+	it("keeps a category open across a re-render", () => {
+		const container = new MockElement("div");
+		const state = oaNewCategoriesSectionState();
+		const categories: ModelCategory[] = [{ id: "cat-1", name: "A", kind: "text", models: [] }];
+		renderSection(container, { state, categories });
+		openCategory(container, "cat-1");
+		renderSection(container, { state, categories });
+		expect(isCategoryOpen(container, "cat-1")).toBe(true);
+	});
+
+	it("keeps a fetch notice across a re-render", () => {
+		const container = new MockElement("div");
+		const state = oaNewCategoriesSectionState();
+		state.noticeIds.add("cat-1");
+		renderSection(container, {
+			state,
+			categories: [{ id: "cat-1", name: "A", kind: "text", models: [] }],
+		});
+		const notices = findByClass(currentRoot(container), "open-agent-notice");
+		expect(notices).toHaveLength(1);
+		expect(notices[0].textContent).toContain("Could not fetch models");
 	});
 
 	it("fetches only the kind of the category it belongs to", async () => {
