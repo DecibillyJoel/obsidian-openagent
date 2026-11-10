@@ -389,6 +389,36 @@ describe("loadStoredTurnsFile", () => {
 		expect(adapter.write).not.toHaveBeenCalled();
 	});
 
+	it("keeps the stored reasoning through the sanitiser", async () => {
+		const adapter = createMockAdapter({
+			"sessions/session-a.json": JSON.stringify({
+				turns: [
+					{ role: "assistant", content: "391", thinking: "17 * 23 = 391" } satisfies StoredTurn,
+					{
+						role: "assistant",
+						content: "",
+						thinking: "spent the budget",
+						generatedImages: [],
+					} satisfies StoredTurn,
+				],
+			}),
+		});
+
+		const result = await loadStoredTurnsFile({
+			adapter,
+			path: "sessions/session-a.json",
+			now: () => 123,
+		});
+
+		expect(result).toEqual({
+			turns: [
+				{ role: "assistant", content: "391", thinking: "17 * 23 = 391" },
+				{ role: "assistant", content: "", thinking: "spent the budget", generatedImages: [] },
+			],
+		});
+		expect(adapter.write).not.toHaveBeenCalled();
+	});
+
 	it("loads legacy turns without agentWork and preserves newer payloads unchanged", async () => {
 		const adapter = createMockAdapter({
 			"sessions/session-a.json": JSON.stringify({

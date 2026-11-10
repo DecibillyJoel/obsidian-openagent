@@ -70,6 +70,7 @@ export interface StoredTurn {
 	content: string;
 	images?: PendingImage[];
 	generatedImages?: GeneratedImage[];
+	thinking?: string;
 	packTurn?: StoredPackTurnData;
 }
 

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import groundedResearchDefault from "../src/packs/defaults/grounded-research.json";
 import { DEFAULT_SETTINGS } from "../src/settings";
 import type { StoredPackTurnData } from "../src/sessions";
+import type { FinishReason } from "../src/types";
 import { ChatView } from "../src/view";
 import {
 	MockElement,
@@ -1552,5 +1553,222 @@ describe("ChatView streamed text", () => {
 
 		expect((view as unknown as { inFlights: Map<string, unknown> }).inFlights.size).toBe(0);
 		expect(textTree(transcriptEl)).toContain("streamed answer");
+	});
+});
+
+// ─── Thoughts block and persisted reasoning ─────────────────────────────────
+
+interface ThoughtsTurn {
+	role: "assistant";
+	content: string;
+	segments: Array<{ kind: "text"; text: string }>;
+	toolCallMap: Record<string, never>;
+	thinking: boolean;
+	generatedImages: never[];
+	thinkingContent?: string;
+	finishReason?: FinishReason;
+}
+
+interface StoredTurnsCast {
+	uiToStoredTurns(turns: unknown[]): Array<Record<string, unknown>>;
+}
+
+interface UiTurnsCast {
+	storedToUiTurns(turns: unknown[]): Promise<ThoughtsTurn[]>;
+}
+
+const EMPTY_REPLY_LINE = "The model used its whole output budget on reasoning, so it returned no answer.";
+
+function thoughtTurn(overrides: Partial<ThoughtsTurn> = {}): ThoughtsTurn {
+	return {
+		role: "assistant",
+		content: "",
+		segments: [],
+		toolCallMap: {},
+		thinking: false,
+		generatedImages: [],
+		...overrides,
+	};
+}
+
+function createThoughtsView(turns: ThoughtsTurn[]): { view: ChatView; transcriptEl: MockElement } {
+	const { view, transcriptEl } = createTranscriptView();
+	(view as unknown as { turns: ThoughtsTurn[] }).turns = turns;
+	return { view, transcriptEl };
+}
+
+function thoughtsContentOf(transcriptEl: MockElement): string[] {
+	return findByClass(transcriptEl, "open-agent-turn-thoughts-content").map((el) => el.textContent);
+}
+
+/** Click the single thoughts toggle in the transcript, the way a reader does. */
+function clickThoughtsToggle(transcriptEl: MockElement): void {
+	const toggles = findByClass(transcriptEl, "open-agent-turn-thoughts-toggle");
+	expect(toggles).toHaveLength(1);
+	toggles[0].click();
+}
+
+function storedTurnsOf(view: ChatView, turns: unknown[]): Array<Record<string, unknown>> {
+	return (view as unknown as StoredTurnsCast).uiToStoredTurns(turns);
+}
+
+async function uiTurnsOf(view: ChatView, stored: unknown[]): Promise<ThoughtsTurn[]> {
+	return (view as unknown as UiTurnsCast).storedToUiTurns(stored);
+}
+
+/** An SSE stream that spends its whole budget on reasoning and stops on length. */
+function oaReasoningOnlyStream(): unknown {
+	const encoder = new TextEncoder();
+	const records = [
+		encoder.encode(
+			`data: ${JSON.stringify({ choices: [{ delta: { reasoning: "17 * 23 = 391" }, finish_reason: null }] })}\n\n`,
+		),
+		encoder.encode(
+			`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "length" }] })}\n\n`,
+		),
+		encoder.encode("data: [DONE]\n\n"),
+	];
+	let index = 0;
+	const body = new ReadableStream<Uint8Array>({
+		async pull(controller) {
+			if (index >= records.length) {
+				controller.close();
+				return;
+			}
+			controller.enqueue(records[index]);
+			index += 1;
+		},
+	});
+	return {
+		ok: true,
+		status: 200,
+		headers: { get: (name: string) => (name.toLowerCase() === "content-type" ? "text/event-stream" : null) },
+		body,
+		text: async () => "",
+	};
+}
+
+describe("ChatView thoughts block", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it("collapses the thoughts block by default", () => {
+		const { view, transcriptEl } = createThoughtsView([
+			thoughtTurn({ segments: [{ kind: "text", text: "391" }], thinkingContent: "17 * 23 = 391" }),
+		]);
+
+		renderTranscriptOf(view);
+
+		expect(findByClass(transcriptEl, "open-agent-turn-thoughts-toggle")).toHaveLength(1);
+		expect(thoughtsContentOf(transcriptEl)).toEqual([]);
+		expect(textTree(transcriptEl)).not.toContain("17 * 23 = 391");
+	});
+
+	it("opens and closes the thoughts block when the reader clicks the toggle", () => {
+		const { view, transcriptEl } = createThoughtsView([
+			thoughtTurn({ segments: [{ kind: "text", text: "391" }], thinkingContent: "17 * 23 = 391" }),
+		]);
+
+		renderTranscriptOf(view);
+		expect(thoughtsContentOf(transcriptEl)).toEqual([]);
+
+		clickThoughtsToggle(transcriptEl);
+		expect(thoughtsContentOf(transcriptEl)).toEqual(["17 * 23 = 391"]);
+
+		clickThoughtsToggle(transcriptEl);
+		expect(thoughtsContentOf(transcriptEl)).toEqual([]);
+	});
+
+	it("stores the reasoning with the assistant turn and restores it", async () => {
+		const { view } = createTranscriptView();
+
+		const stored = storedTurnsOf(view, [
+			thoughtTurn({ segments: [{ kind: "text", text: "391" }], thinkingContent: "17 * 23 = 391" }),
+		]);
+		expect(stored).toEqual([{ role: "assistant", content: "391", thinking: "17 * 23 = 391" }]);
+
+		const restored = await uiTurnsOf(view, stored);
+		expect(restored).toHaveLength(1);
+		expect(restored[0].thinkingContent).toBe("17 * 23 = 391");
+		expect(restored[0].segments).toEqual([{ kind: "text", text: "391" }]);
+	});
+
+	it("stores a turn that used its whole budget on reasoning", async () => {
+		const { view } = createTranscriptView();
+
+		const stored = storedTurnsOf(view, [
+			thoughtTurn({ thinkingContent: "17 * 23 = 391", finishReason: "length" }),
+		]);
+		expect(stored).toEqual([{ role: "assistant", content: "", thinking: "17 * 23 = 391" }]);
+
+		const restored = await uiTurnsOf(view, stored);
+		expect(restored[0].thinkingContent).toBe("17 * 23 = 391");
+	});
+
+	it("writes no thinking field when the turn has no reasoning", () => {
+		const { view } = createTranscriptView();
+
+		const stored = storedTurnsOf(view, [
+			thoughtTurn({ segments: [{ kind: "text", text: "391" }] }),
+			thoughtTurn({ thinkingContent: "   " }),
+		]);
+
+		expect(stored).toEqual([{ role: "assistant", content: "391" }]);
+	});
+
+	it("leaves the reasoning undefined for a session written before it was stored", async () => {
+		const { view } = createTranscriptView();
+
+		const restored = await uiTurnsOf(view, [{ role: "assistant", content: "old answer" }]);
+
+		expect(restored).toHaveLength(1);
+		expect(restored[0].thinkingContent).toBeUndefined();
+		expect(restored[0].segments).toEqual([{ kind: "text", text: "old answer" }]);
+	});
+
+	it("shows the empty-reply line when the stream spent its budget on reasoning", async () => {
+		vi.stubGlobal("window", oaWindowShim());
+		const { view, transcriptEl, inputEl } = createSendView();
+		fetchMock.mockResolvedValue(oaReasoningOnlyStream());
+		vi.stubGlobal("fetch", fetchMock);
+
+		inputEl.value = "what is 17 * 23";
+		await (view as unknown as { handleSend(): Promise<void> }).handleSend();
+
+		const tree = textTree(transcriptEl);
+		expect(tree).toContain(EMPTY_REPLY_LINE);
+		expect(findByClass(transcriptEl, "open-agent-turn-thoughts-content")).toHaveLength(0);
+		expect(findByClass(transcriptEl, "open-agent-turn-thoughts-toggle")).toHaveLength(1);
+	});
+
+	it("renders the empty-reply line for a restored turn that stopped on length", () => {
+		const { view, transcriptEl } = createThoughtsView([
+			thoughtTurn({ thinkingContent: "17 * 23 = 391", finishReason: "length" }),
+		]);
+
+		renderTranscriptOf(view);
+
+		expect(textTree(transcriptEl)).toContain(EMPTY_REPLY_LINE);
+	});
+
+	it("omits the empty-reply line when the turn has text", () => {
+		const { view, transcriptEl } = createThoughtsView([
+			thoughtTurn({ segments: [{ kind: "text", text: "391" }], thinkingContent: "17 * 23 = 391", finishReason: "length" }),
+		]);
+
+		renderTranscriptOf(view);
+
+		expect(textTree(transcriptEl)).not.toContain(EMPTY_REPLY_LINE);
+	});
+
+	it("omits the empty-reply line when the stream finished normally", () => {
+		const { view, transcriptEl } = createThoughtsView([
+			thoughtTurn({ thinkingContent: "17 * 23 = 391", finishReason: "stop" }),
+		]);
+
+		renderTranscriptOf(view);
+
+		expect(textTree(transcriptEl)).not.toContain(EMPTY_REPLY_LINE);
 	});
 });

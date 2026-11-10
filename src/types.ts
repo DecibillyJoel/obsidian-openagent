@@ -63,13 +63,15 @@ export interface AssembledToolCall {
 	rawArguments: string;
 }
 
+export type FinishReason = "stop" | "tool_calls" | "length" | "content_filter" | "unknown";
+
 export type StreamEvent =
 	// `text` carries one streamed delta, not the whole answer. Append it to the output.
 	| { kind: "text"; text: string; degraded?: boolean }
 	| { kind: "images"; urls: string[] }
 	| { kind: "thinking_text"; text: string }
 	| { kind: "tool_call_assembled"; calls: AssembledToolCall[]; degraded?: boolean }
-	| { kind: "done"; finishReason: "stop" | "tool_calls" | "length" | "content_filter" | "unknown" };
+	| { kind: "done"; finishReason: FinishReason };
 
 export interface ResponseFormatJsonSchemaConfig {
 	name: string;
@@ -167,7 +169,7 @@ export type LoopEvent =
 	| { kind: "consent_requested"; id: string; name: string }
 	| { kind: "tool_call_finished"; id: string; result: ToolResult }
 	| { kind: "cap_hit" }
-	| { kind: "done"; finishReason?: "stop" | "tool_calls" | "length" | "content_filter" | "unknown" };
+	| { kind: "done"; finishReason?: FinishReason };
 
 // Errors
 export class AuthError extends Error {

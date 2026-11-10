@@ -12,6 +12,7 @@ import type { ResolveToolImages } from "../images/attachments";
 import type {
 	AssembledToolCall,
 	ChatMessage,
+	FinishReason,
 	GetConversationImages,
 	GetImageModel,
 	ModelProvider,
@@ -78,7 +79,7 @@ async function* executeAgentLoop(
 	for (let step = 0; step < maxSteps; step++) {
 		const assembled: AssembledToolCall[] = [];
 		let assistantText = "";
-		let finishReason: "stop" | "tool_calls" | "length" | "content_filter" | "unknown" | undefined;
+		let finishReason: FinishReason | undefined;
 
 		for await (const ev of opts.provider.stream(messages, {
 			signal: opts.signal,

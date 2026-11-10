@@ -40,7 +40,7 @@ import type { ToolRegistry } from "./tools/registry";
 import { oaSanitizeGeneratedImages } from "./tools/image-generate";
 import { runWithTimeout, ToolTimeoutError, DEFAULT_TOOL_TIMEOUT_MS } from "./tools/timeout";
 import { validateArgs } from "./tools/validate";
-import { AuthError, type ChatMessage, NetworkError, ProviderError, RateLimitError, type ToolResult, type ConversationImageReference, type GeneratedImage } from "./types";
+import { AuthError, type ChatMessage, NetworkError, ProviderError, RateLimitError, type ToolResult, type ConversationImageReference, type FinishReason, type GeneratedImage } from "./types";
 
 export const CHAT_VIEW_TYPE = "open-agent-chat";
 
@@ -111,6 +111,7 @@ interface UiTurn {
 	thinking: boolean; // true until first content arrives
 	thinkingLabel?: string; // optional context label shown inside the thinking indicator
 	thinkingContent?: string; // model reasoning/thoughts extracted from response
+	finishReason?: FinishReason; // how the stream ended, when the provider reported it
 	interrupted?: boolean;
 	degraded?: boolean;
 	error?: string;
@@ -187,7 +188,7 @@ export class ChatView extends ItemView {
 
 	// Panel state
 	private sessionsPanelVisible = false;
-	private thinkingHidden = false;
+	private thinkingHidden = true;
 	private availablePacks: AgentPack[] = [];
 	private activePackError: string | null = null;
 	private readonly packExpandedStepId = new WeakMap<StoredPackTurnData, string | null>();
@@ -851,6 +852,7 @@ export class ChatView extends ItemView {
 					segments: [{ kind: "text" as const, text: st.content }],
 					toolCallMap: {},
 					thinking: false,
+					thinkingContent: st.thinking,
 					generatedImages: oaSanitizeGeneratedImages(st.generatedImages),
 				} as UiTurn;
 			}),
@@ -878,8 +880,14 @@ export class ChatView extends ItemView {
 					.filter((s): s is { kind: "text"; text: string } => s.kind === "text")
 					.map((s) => s.text)
 					.join("");
-				if (text.length > 0 || t.generatedImages?.length) {
-					result.push({ role: "assistant", content: text, ...generatedImages });
+				const thinking = t.thinkingContent?.trim() ?? "";
+				if (text.length > 0 || t.generatedImages?.length || thinking.length > 0) {
+					result.push({
+						role: "assistant",
+						content: text,
+						...(thinking.length > 0 ? { thinking } : {}),
+						...generatedImages,
+					});
 				}
 			}
 		}
@@ -1152,6 +1160,8 @@ export class ChatView extends ItemView {
 						assistantTurn.thinking && tc ? `Processing ${tc.name}…` : undefined;
 				} else if (ev.kind === "cap_hit") {
 					assistantTurn.capHit = true;
+				} else if (ev.kind === "done") {
+					if (ev.finishReason !== undefined) assistantTurn.finishReason = ev.finishReason;
 				}
 				if (this.turns.includes(assistantTurn)) this.scheduleRender();
 			}
@@ -1541,6 +1551,13 @@ export class ChatView extends ItemView {
 			}
 			if (turn.capHit) {
 				row.createEl("div", { cls: "open-agent-turn-meta", text: "(stopped: hit max-steps cap)" });
+			}
+			const hasText = turn.segments.some((segment) => segment.kind === "text" && segment.text.length > 0);
+			if (!hasText && turn.finishReason === "length" && (turn.thinkingContent ?? "").length > 0) {
+				row.createEl("div", {
+					cls: "open-agent-turn-meta",
+					text: "The model used its whole output budget on reasoning, so it returned no answer.",
+				});
 			}
 			if (turn.interrupted) {
 				row.createEl("div", { cls: "open-agent-turn-meta", text: "(interrupted)" });
