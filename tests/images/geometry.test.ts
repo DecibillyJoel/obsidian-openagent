@@ -13,6 +13,7 @@ import {
 	oaResolutionForSize,
 	oaResolutionTierTable,
 } from "../../src/images/geometry";
+import { ok } from "../../src/tools/define";
 import type { ChatContentImagePart, ToolDef } from "../../src/types";
 import { MockTFile } from "../setup";
 
@@ -256,6 +257,22 @@ describe("oaAnnotateTools", () => {
 			},
 		});
 		expect(await write.run({}, {} as never)).toEqual({ ok: false, error: "no" });
+	});
+
+	it("adds the annotation budget to the tool's own timeout", () => {
+		const app = mockApp([], async () => new ArrayBuffer(0));
+		const [wrapped] = oaAnnotateTools(app, [
+			{ name: "image_snip", timeoutMs: 1000, run: async () => ok({}) },
+		] as unknown as ToolDef[]);
+		expect(wrapped.timeoutMs).toBe(11_000);
+	});
+
+	it("uses the default timeout when the tool sets none", () => {
+		const app = mockApp([], async () => new ArrayBuffer(0));
+		const [wrapped] = oaAnnotateTools(app, [
+			{ name: "image_snip", run: async () => ok({}) },
+		] as unknown as ToolDef[]);
+		expect(wrapped.timeoutMs).toBe(40_000);
 	});
 });
 

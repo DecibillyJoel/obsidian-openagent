@@ -1,4 +1,5 @@
 import { TFile, type App } from "obsidian";
+import { DEFAULT_TOOL_TIMEOUT_MS } from "../tools/timeout";
 import type { ChatContentImagePart, ToolDef } from "../types";
 import { oaDetectImageMime, oaImageMimeFromTarget } from "./attachments";
 import { oaDataUrlToBytes } from "./data-url";
@@ -161,12 +162,16 @@ export async function oaAnnotateImageGeometry(
 	for (const item of Object.values(record)) await oaAnnotateImageGeometry(app, item, seen);
 }
 
+/** Extra time the wrapper allows for image sniffing on top of the tool's own timeout. */
+export const OA_GEOMETRY_ANNOTATION_BUDGET_MS = 10_000;
+
 /** Wraps every tool so a successful result is annotated with image geometry. */
 export function oaAnnotateTools(app: App, tools: ToolDef[]): ToolDef[] {
 	return tools.map((tool): ToolDef => {
 		const run = tool.run;
 		return {
 			...tool,
+			timeoutMs: (tool.timeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS) + OA_GEOMETRY_ANNOTATION_BUDGET_MS,
 			async run(args, ctx) {
 				const result = await run(args, ctx);
 				if (result.ok) await oaAnnotateImageGeometry(app, result.value);
