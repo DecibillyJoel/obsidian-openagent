@@ -8,11 +8,13 @@ import { isMobile } from "./platform";
 import { OpenAICompatibleProvider, oaFetchModelIds, oaModelEligibleOrUnknown } from "./provider";
 import { resolveCitationTarget } from "./citations";
 import {
+	oaCapConversationImages,
 	oaDetectImageMime,
 	oaMultimodalContent,
 	oaResolveToolImages,
 	oaSanitizeImages,
 	OA_IMAGE_MIMES,
+	OA_MAX_DATA_URL_BYTES,
 	OA_MAX_IMAGE_BYTES,
 	OA_MAX_IMAGES,
 	OA_MAX_TOTAL_IMAGE_BYTES,
@@ -901,10 +903,20 @@ export class ChatView extends ItemView {
 
 	private getConversationImages(turns: UiTurn[] = this.turns): ConversationImageReference[] {
 		const list: ConversationImageReference[] = [];
+		const userImages: PendingImage[] = [];
 		for (const turn of turns) {
 			if (turn.role === "user") {
 				for (const image of turn.images ?? []) {
-					if (typeof image.url === "string") list.push({ url: image.url, name: image.name });
+					if (typeof image.url === "string") userImages.push(image);
+				}
+			}
+		}
+		const kept = new Set(oaCapConversationImages(userImages));
+		for (const turn of turns) {
+			if (turn.role === "user") {
+				for (const image of turn.images ?? []) {
+					if (typeof image.url !== "string" || !kept.has(image)) continue;
+					list.push({ url: image.url, name: image.name });
 				}
 			} else {
 				for (const image of turn.generatedImages ?? []) {
@@ -1655,12 +1667,17 @@ export class ChatView extends ItemView {
 						new Notice(`${file.name}: converted PNG exceeds the 64 MB total image limit.`);
 						continue;
 					}
+					const url = oaBytesToDataUrl(png, "image/png");
+					if (url.length > OA_MAX_DATA_URL_BYTES) {
+						new Notice(`${file.name}: converted PNG exceeds the 24 MB per-image data URL limit.`);
+						continue;
+					}
 					this.pendingImages.push({
 						id: crypto.randomUUID(),
 						name: file.name || "image",
 						mimeType: "image/png",
 						size: png.byteLength,
-						url: oaBytesToDataUrl(png, "image/png"),
+						url,
 					});
 					total += png.byteLength;
 				} catch (error) {

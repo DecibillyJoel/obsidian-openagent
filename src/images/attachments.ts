@@ -230,16 +230,31 @@ export async function oaResolveToolImages(app: App, ctx: unknown): Promise<Pendi
 	return images;
 }
 
+/** Trims a list of ready data-URL images to what a request may carry. Newest survive. */
+export function oaCapConversationImages(images: PendingImage[]): PendingImage[] {
+	const kept: PendingImage[] = [];
+	let total = 0;
+	for (let index = images.length - 1; index >= 0; index -= 1) {
+		const image = images[index];
+		if (!image || typeof image.url !== "string" || image.url.length === 0) continue;
+		if (image.url.length > OA_MAX_DATA_URL_BYTES) continue;
+		if (kept.length >= OA_MAX_IMAGES) break;
+		if (total + image.url.length > OA_MAX_TOTAL_IMAGE_BYTES) break;
+		kept.push(image);
+		total += image.url.length;
+	}
+	return kept.reverse();
+}
+
 export function getConversationImages(
 	turns: ReadonlyArray<{ images?: PendingImage[] | null }> = [],
 ): PendingImage[] {
 	const images: PendingImage[] = [];
 	for (const turn of turns) {
 		for (const image of turn.images ?? []) {
-			if (!image || typeof image.url !== "string" || image.url.length === 0) continue;
-			if (image.url.length > OA_MAX_DATA_URL_BYTES) continue;
+			if (!image) continue;
 			images.push(image);
 		}
 	}
-	return images.slice(-OA_MAX_IMAGES);
+	return oaCapConversationImages(images);
 }

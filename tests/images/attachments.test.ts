@@ -8,6 +8,7 @@ import {
 	OA_MAX_IMAGES,
 	OA_MAX_PNG_BYTES,
 	OA_MAX_TOTAL_IMAGE_BYTES,
+	oaCapConversationImages,
 	oaCollectToolImageTargets,
 	oaDetectImageMime,
 	oaExtractImageTargets,
@@ -269,6 +270,38 @@ describe("getConversationImages", () => {
 			{ images: [image({ id: "small-2", url: "data:image/png;base64,bb==" })] },
 		];
 		expect(getConversationImages(turns).map((entry) => entry.id)).toEqual(["small", "small-2"]);
+	});
+});
+
+describe("oaCapConversationImages", () => {
+	it("keeps the newest images and drops the rest", () => {
+		const images = Array.from({ length: OA_MAX_IMAGES + 3 }, (_value, index) => ({
+			id: String(index),
+			name: `i${index}.png`,
+			mimeType: "image/png",
+			size: 10,
+			url: `data:image/png;base64,${"A".repeat(10)}`,
+		}));
+		const kept = oaCapConversationImages(images);
+		expect(kept).toHaveLength(OA_MAX_IMAGES);
+		expect(kept[kept.length - 1].name).toBe(`i${OA_MAX_IMAGES + 2}.png`);
+	});
+
+	it("drops an image whose data URL alone exceeds the cap", () => {
+		const big = {
+			id: "b",
+			name: "big.png",
+			mimeType: "image/png",
+			size: 1,
+			url: `data:image/png;base64,${"A".repeat(OA_MAX_DATA_URL_BYTES + 1)}`,
+		};
+		expect(oaCapConversationImages([big])).toEqual([]);
+	});
+
+	it("stops adding images once the running total exceeds the cap", () => {
+		const half = `data:image/png;base64,${"A".repeat(OA_MAX_TOTAL_IMAGE_BYTES / 3)}`;
+		const one = { id: "1", name: "one.png", mimeType: "image/png", size: 1, url: half };
+		expect(oaCapConversationImages([one, one, one])).toHaveLength(2);
 	});
 });
 

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import groundedResearchDefault from "../src/packs/defaults/grounded-research.json";
+import { OA_MAX_DATA_URL_BYTES, OA_MAX_IMAGES } from "../src/images/attachments";
 import { DEFAULT_SETTINGS } from "../src/settings";
 import type { StoredPackTurnData } from "../src/sessions";
 import { AuthError, NetworkError, type FinishReason } from "../src/types";
@@ -1902,5 +1903,118 @@ describe("ChatView provider error reporting", () => {
 		expect(errorSpy).toHaveBeenCalled();
 		expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(apiKey);
 		errorSpy.mockRestore();
+	});
+});
+
+describe("ChatView conversation image cap", () => {
+	it("never hands a request more conversation images than the cap allows", () => {
+		const { view } = createTranscriptView();
+		const turns = Array.from({ length: OA_MAX_IMAGES + 2 }, (_value, index) => ({
+			role: "user" as const,
+			content: "",
+			segments: [],
+			toolCallMap: {},
+			thinking: false,
+			images: [
+				{
+					id: `i${index}`,
+					name: `i${index}.png`,
+					mimeType: "image/png",
+					size: 8,
+					url: `data:image/png;base64,i${index}==`,
+				},
+			],
+		}));
+		turns.push({
+			role: "user" as const,
+			content: "",
+			segments: [],
+			toolCallMap: {},
+			thinking: false,
+			images: [
+				{
+					id: "huge",
+					name: "huge.png",
+					mimeType: "image/png",
+					size: 8,
+					url: `data:image/png;base64,${"A".repeat(OA_MAX_DATA_URL_BYTES)}`,
+				},
+			],
+		});
+		const refs = (
+			view as unknown as {
+				getConversationImages(turns: unknown[]): Array<{ url?: string; name: string }>;
+			}
+		).getConversationImages(turns);
+
+		expect(refs).toHaveLength(OA_MAX_IMAGES);
+		expect(refs[refs.length - 1].name).toBe(`i${OA_MAX_IMAGES + 1}.png`);
+		expect(refs.some((ref) => ref.name === "huge.png")).toBe(false);
+	});
+
+	it("keeps every image where it sits in the conversation", () => {
+		const { view } = createTranscriptView();
+		const userImage = (id: string) => ({
+			id,
+			name: `${id}.png`,
+			mimeType: "image/png",
+			size: 8,
+			url: `data:image/png;base64,${id}==`,
+		});
+		const turn = (extra: Record<string, unknown>) => ({
+			content: "",
+			segments: [],
+			toolCallMap: {},
+			thinking: false,
+			...extra,
+		});
+		const turns = [
+			turn({ role: "user", images: [userImage("first")] }),
+			turn({
+				role: "assistant",
+				segments: [{ kind: "text", text: "here is the picture" }],
+				generatedImages: [{ path: "generated/one.png", name: "one.png" }],
+			}),
+			turn({
+				role: "assistant",
+				segments: [{ kind: "text", text: "and this one ![](attachments/shown.png)" }],
+			}),
+			turn({ role: "user", images: [userImage("last")] }),
+		];
+		const refs = (
+			view as unknown as {
+				getConversationImages(turns: unknown[]): Array<{ url?: string; name: string }>;
+			}
+		).getConversationImages(turns);
+
+		expect(refs.map((ref) => ref.name)).toEqual([
+			"first.png",
+			"generated/one.png",
+			"attachments/shown.png",
+			"last.png",
+		]);
+	});
+
+	it("rejects an attachment whose converted PNG exceeds the data URL cap", async () => {
+		const { view } = createSendView();
+		const pngLength = Math.ceil((OA_MAX_DATA_URL_BYTES * 3) / 4) + 3;
+		const png = new Uint8Array(pngLength);
+		png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+		const file = {
+			name: "huge.png",
+			size: 100,
+			arrayBuffer: async () => png.buffer,
+		} as unknown as File;
+
+		await (
+			view as unknown as { addImageFiles(files: File[]): Promise<void> }
+		).addImageFiles([file]);
+
+		const pending = (view as unknown as { pendingImages: unknown[] }).pendingImages;
+		const messages = NoticeMock.mock.calls.map((call) => String(call[0]));
+		expect(pending).toHaveLength(0);
+		expect(messages.some((message) => message.includes("huge.png") && message.includes("24 MB"))).toBe(
+			true,
+		);
 	});
 });
