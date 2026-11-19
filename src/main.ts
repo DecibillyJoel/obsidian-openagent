@@ -10,6 +10,7 @@ import { ToolRegistry } from "./tools/registry";
 import { vaultTools } from "./tools/vault";
 import { openAgentImageGenerateTool } from "./tools/image-generate";
 import { openAgentImageRegionTool } from "./tools/image-region";
+import { webTools } from "./tools/web";
 import { ensureParentFolder } from "./tools/vault/ensure-folder";
 import { CHAT_VIEW_TYPE, ChatView } from "./view";
 import { isMobile } from "./platform";
@@ -74,6 +75,7 @@ export default class OpenAgentPlugin extends Plugin {
 				openAgentImageGenerateTool(this.app, () => this.settings),
 				openAgentImageRegionTool(this.app, "snip"),
 				openAgentImageRegionTool(this.app, "blot"),
+				...webTools(),
 				...vaultTools(this.app, { undo: this.undo }),
 			]),
 		);
