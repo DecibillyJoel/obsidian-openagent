@@ -18,6 +18,8 @@ export interface PluginSettings {
 	apiKey: string;
 	model: string;
 	imageModel: string;
+	geminiApiKey: string;
+	geminiModel: string;
 	systemPrompt: string;
 	consent: ConsentSettings;
 	packProviderOverrides: Record<string, Record<string, Partial<OpenAICompatibleConfig>>>;
@@ -30,6 +32,8 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 	apiKey: "",
 	model: "gpt-4o-mini",
 	imageModel: "",
+	geminiApiKey: "",
+	geminiModel: "gemini-2.5-flash",
 	systemPrompt: "",
 	consent: { ...DEFAULT_CONSENT },
 	packProviderOverrides: {},
@@ -39,6 +43,14 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 /** Reads a stored field as text. Returns an empty string when the stored value is not a string. */
 function storedString(value: unknown): string {
 	return typeof value === "string" ? value : "";
+}
+
+/** Reads the stored Gemini fields as text. Falls back to the default model when the stored model is not usable. */
+export function oaGeminiSettings(s: PluginSettings): { apiKey: string; model: string } {
+	return {
+		apiKey: storedString(s.geminiApiKey).trim(),
+		model: storedString(s.geminiModel).trim() || DEFAULT_SETTINGS.geminiModel,
+	};
 }
 
 export function isConfigured(s: PluginSettings): boolean {
@@ -115,6 +127,35 @@ export class OpenAgentSettingsTab extends PluginSettingTab {
 				txt.inputEl.type = "password";
 				txt.inputEl.autocomplete = "off";
 			});
+
+		new Setting(containerEl).setName("Web research").setHeading();
+
+		new Setting(containerEl)
+			.setName("Gemini API key")
+			.setDesc("Key for the research tool. Stored in plugin data, never in local storage or the vault.")
+			.addText((txt) => {
+				txt.setPlaceholder("")
+					.setValue(this.plugin.settings.geminiApiKey)
+					.onChange(async (v) => {
+						this.plugin.settings.geminiApiKey = v;
+						await this.plugin.saveSettings();
+					});
+				txt.inputEl.type = "password";
+				txt.inputEl.autocomplete = "off";
+			});
+
+		new Setting(containerEl)
+			.setName("Gemini model")
+			.setDesc("Model name for the research tool.")
+			.addText((txt) =>
+				txt
+					.setPlaceholder(DEFAULT_SETTINGS.geminiModel)
+					.setValue(this.plugin.settings.geminiModel)
+					.onChange(async (v) => {
+						this.plugin.settings.geminiModel = v;
+						await this.plugin.saveSettings();
+					}),
+			);
 
 		const modelContainer = containerEl.createDiv();
 		this.renderModelSetting(

@@ -75,7 +75,7 @@ export default class OpenAgentPlugin extends Plugin {
 				openAgentImageGenerateTool(this.app, () => this.settings),
 				openAgentImageRegionTool(this.app, "snip"),
 				openAgentImageRegionTool(this.app, "blot"),
-				...webTools(),
+				...webTools(() => this.settings),
 				...vaultTools(this.app, { undo: this.undo }),
 			]),
 		);

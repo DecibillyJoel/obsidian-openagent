@@ -61,8 +61,8 @@ function run(toolName: string, url: string): Promise<unknown> {
 describe("webTools", () => {
 	it("registers web_fetch then web_read, both read-only and time-limited", () => {
 		const tools = webTools();
-		expect(tools.map((tool) => tool.name)).toEqual(["web_fetch", "web_read"]);
-		for (const tool of tools) {
+		expect(tools.map((tool) => tool.name)).toEqual(["web_fetch", "web_read", "research"]);
+		for (const tool of tools.filter((candidate) => candidate.name !== "research")) {
 			expect(tool.category).toBe("web");
 			expect(tool.mutates).toBe(false);
 			expect(tool.timeoutMs).toBe(20_000);
@@ -72,7 +72,7 @@ describe("webTools", () => {
 	});
 
 	it("states the redirect limitation in both descriptions", () => {
-		for (const tool of webTools()) {
+		for (const tool of webTools().filter((candidate) => candidate.name !== "research")) {
 			const limitation =
 				"`requestUrl` does not report the final URL after a redirect, so `url` in the result is the URL that was requested while the content may be the page it redirected to.";
 			expect(tool.description).toContain(limitation);
