@@ -317,8 +317,76 @@ export const MarkdownRendererMock = {
 	}),
 };
 
-export const htmlToMarkdownMock = (html: string | { innerHTML?: string }): string =>
-	typeof html === "string" ? html : html.innerHTML ?? "";
+export interface MockHtmlElement {
+	textContent: string;
+	getAttribute(name: string): string | null;
+	setAttribute(name: string, value: string): void;
+}
+
+export interface MockHtmlFragment {
+	textContent: string;
+	innerHTML: string;
+	querySelectorAll(selector: string): MockHtmlElement[];
+}
+
+export interface MockHtmlFragmentOptions {
+	textContent?: string;
+	markdown?: string;
+	anchors?: MockHtmlElement[];
+}
+
+/** Every value handed to `htmlToMarkdown`. */
+export const htmlToMarkdownCalls: unknown[] = [];
+
+/** Every `setAttribute` call the code under test makes on a mock element. */
+export const setAttributeCalls: Array<{ element: MockHtmlElement; name: string; value: string }> = [];
+
+export function createMockAnchor(href: string, text: string): MockHtmlElement {
+	const attributes = new Map<string, string>([["href", href]]);
+	const element: MockHtmlElement = {
+		textContent: text,
+		getAttribute(name: string): string | null {
+			return attributes.get(name) ?? null;
+		},
+		setAttribute(name: string, value: string): void {
+			attributes.set(name, value);
+			setAttributeCalls.push({ element, name, value });
+		},
+	};
+	return element;
+}
+
+export function createMockHtmlFragment(options: MockHtmlFragmentOptions = {}): MockHtmlFragment {
+	return {
+		textContent: options.textContent ?? "",
+		innerHTML: options.markdown ?? "",
+		querySelectorAll: () => options.anchors ?? [],
+	};
+}
+
+const MOCK_ENTITIES: Record<string, string> = { amp: "&", apos: "'", gt: ">", lt: "<", nbsp: " ", quot: '"' };
+
+/** Mirror the entity decode that a native `textContent` read performs. */
+function decodeMockEntities(value: string): string {
+	return value.replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/g, (match, body: string) => {
+		if (!body.startsWith("#")) return MOCK_ENTITIES[body] ?? match;
+		const hex = body[1] === "x" || body[1] === "X";
+		const code = Number.parseInt(body.slice(hex ? 2 : 1), hex ? 16 : 10);
+		if (!Number.isFinite(code) || code < 1 || code > 0x10ffff) return match;
+		return String.fromCodePoint(code);
+	});
+}
+
+export function defaultSanitizeHTMLToDom(html: string): MockHtmlFragment {
+	return createMockHtmlFragment({ textContent: decodeMockEntities(html) });
+}
+
+export const sanitizeHTMLToDomMock = vi.fn(defaultSanitizeHTMLToDom);
+
+export const htmlToMarkdownMock = (html: string | { innerHTML?: string }): string => {
+	htmlToMarkdownCalls.push(html);
+	return typeof html === "string" ? html : html.innerHTML ?? "";
+};
 
 class MockPluginSettingTab {
 	app: unknown;
@@ -447,6 +515,7 @@ vi.mock("obsidian", () => ({
 	Modal: MockModal,
 	MarkdownRenderer: MarkdownRendererMock,
 	htmlToMarkdown: htmlToMarkdownMock,
+	sanitizeHTMLToDom: sanitizeHTMLToDomMock,
 	Notice: NoticeMock,
 	TFile: MockTFile,
 	WorkspaceLeaf: MockWorkspaceLeaf,
@@ -463,4 +532,8 @@ beforeEach(() => {
 	setMobileMode(false);
 	requestUrlMock.mockClear();
 	NoticeMock.mockClear();
+	sanitizeHTMLToDomMock.mockReset();
+	sanitizeHTMLToDomMock.mockImplementation(defaultSanitizeHTMLToDom);
+	htmlToMarkdownCalls.length = 0;
+	setAttributeCalls.length = 0;
 });
