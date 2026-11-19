@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ConsentManager } from "../../src/consent/manager";
-import type { ToolDef } from "../../src/types";
+import type { ConsentMode, ToolDef } from "../../src/types";
 
 function toolNamed(name: string): ToolDef {
 	return {
@@ -14,7 +14,22 @@ function toolNamed(name: string): ToolDef {
 }
 
 function askingManager(): ConsentManager {
-	return new ConsentManager(() => ({ vault_read: "always", vault_write: "ask" }));
+	return new ConsentManager(() => ({ vault_read: "always", vault_write: "ask", web: "always" }));
+}
+
+function webToolNamed(name: string): ToolDef {
+	return {
+		name,
+		description: name,
+		schema: { type: "object", properties: {}, additionalProperties: true },
+		category: "web",
+		mutates: false,
+		run: async () => ({ ok: true as const, value: null }),
+	};
+}
+
+function webManager(mode: ConsentMode): ConsentManager {
+	return new ConsentManager(() => ({ vault_read: "always", vault_write: "ask", web: mode }));
 }
 
 interface Observation {
@@ -97,5 +112,36 @@ describe("ConsentManager request queue", () => {
 		manager.cancelPendingConsent();
 		expect(await first).toBe(false);
 		expect(await second).toBe(false);
+	});
+});
+
+describe("ConsentManager isRefused", () => {
+	it("reports refusal only for the never mode", () => {
+		expect(webManager("never").isRefused("web")).toBe(true);
+		expect(webManager("always").isRefused("web")).toBe(false);
+		expect(webManager("ask").isRefused("web")).toBe(false);
+	});
+});
+
+describe("ConsentManager and a non-mutating tool", () => {
+	it("refuses a non-mutating tool when its category mode is never", async () => {
+		const manager = webManager("never");
+
+		expect(await manager.requestApproval(webToolNamed("web_fetch"), {})).toBe(false);
+	});
+
+	it("approves a non-mutating tool when its category mode is always", async () => {
+		const manager = webManager("always");
+
+		expect(await manager.requestApproval(webToolNamed("web_fetch"), {})).toBe(true);
+	});
+
+	it("approves a non-mutating tool in ask mode without queueing a prompt", async () => {
+		const manager = webManager("ask");
+		const observation = observe(manager.requestApproval(webToolNamed("web_fetch"), {}));
+		await flushMicrotasks();
+
+		expect(observation.settled()).toBe(true);
+		expect(observation.value()).toBe(true);
 	});
 });

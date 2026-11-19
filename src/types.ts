@@ -129,7 +129,7 @@ export interface JsonSchema {
 }
 
 // Tool definitions
-export type ToolCategory = "vault_read" | "vault_write";
+export type ToolCategory = "vault_read" | "vault_write" | "web";
 
 export type ToolResult =
 	| { ok: true; value: unknown }
@@ -148,6 +148,7 @@ export interface ToolDef<TArgs = unknown> {
 	category: ToolCategory;
 	mutates: boolean;
 	requiresApproval?: boolean; // default true — set false to skip the consent prompt
+	isAvailable?: () => boolean; // default true — return false to hide the tool from the model
 	stopOnFailure?: boolean; // default false — when true, a failed call ends the run
 	timeoutMs?: number;
 	run(args: TArgs, ctx: ToolContext): Promise<ToolResult>;

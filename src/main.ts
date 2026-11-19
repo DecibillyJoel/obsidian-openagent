@@ -129,7 +129,10 @@ export default class OpenAgentPlugin extends Plugin {
 		this.settings = {
 			...DEFAULT_SETTINGS,
 			...(data ?? {}),
-			consent: { ...DEFAULT_SETTINGS.consent, ...(data?.consent ?? {}) },
+			consent: {
+				...DEFAULT_SETTINGS.consent,
+				...(data?.consent ?? {}),
+			},
 			modelCategories: oaSanitizeModelCategories((data ?? {}).modelCategories),
 		};
 		const rawSessions = Array.isArray(data?.sessions)

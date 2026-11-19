@@ -180,6 +180,7 @@ export class OpenAgentSettingsTab extends PluginSettingTab {
 
 		this.consentDropdown(containerEl, "Read tools", "vault_read");
 		this.consentDropdown(containerEl, "Write tools", "vault_write");
+		this.consentDropdown(containerEl, "Web tools", "web");
 
 		new Setting(containerEl).setName("Pack models").setHeading();
 
@@ -389,6 +390,9 @@ export class OpenAgentSettingsTab extends PluginSettingTab {
 	private consentDesc(key: keyof ConsentSettings): string {
 		if (key === "vault_read") {
 			return "Reads (list, read, search, metadata, links). Default: Always.";
+		}
+		if (key === "web") {
+			return "Network tools (fetch, research). Their requests leave your vault. Default: Always.";
 		}
 		return "Writes (write, append, edit). Default: Ask. Choose 'Never' to disable mutating tools entirely.";
 	}

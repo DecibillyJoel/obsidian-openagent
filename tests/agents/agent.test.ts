@@ -100,7 +100,7 @@ describe("Agent runtime guards", () => {
 			requiresApproval: false,
 			run,
 		} satisfies ToolDef);
-		const consent = new ConsentManager(() => ({ vault_read: "always", vault_write: "never" }));
+		const consent = new ConsentManager(() => ({ vault_read: "always", vault_write: "ask", web: "always" }));
 		const { provider, streamCount } = toolCallThenText("image_generate", {});
 
 		const events = await collect(new Agent(definition), provider, { tools: registry, consent });
@@ -122,7 +122,7 @@ describe("Agent runtime guards", () => {
 			mutates: true,
 			run,
 		} satisfies ToolDef);
-		const consent = new ConsentManager(() => ({ vault_read: "always", vault_write: "ask" }));
+		const consent = new ConsentManager(() => ({ vault_read: "always", vault_write: "ask", web: "always" }));
 		const { provider } = toolCallThenText("vault_write", {});
 
 		const events: LoopEvent[] = [];
@@ -138,6 +138,53 @@ describe("Agent runtime guards", () => {
 
 		expect(events.some((event) => event.kind === "consent_requested")).toBe(true);
 		expect(run).toHaveBeenCalledTimes(1);
+	});
+
+	it("refuses a non-mutating tool when its category mode is never", async () => {
+		const run = vi.fn(async () => ({ ok: true as const, value: "fetched" }));
+		const registry = new ToolRegistry();
+		registry.register({
+			name: "web_fetch",
+			description: "Fetch",
+			schema: { type: "object", properties: {}, additionalProperties: false },
+			category: "web",
+			mutates: false,
+			run,
+		} satisfies ToolDef);
+		const consent = new ConsentManager(() => ({ vault_read: "always", vault_write: "ask", web: "never" }));
+		const { provider } = toolCallThenText("web_fetch", {});
+
+		const events = await collect(new Agent(definition), provider, { tools: registry, consent });
+
+		expect(run).not.toHaveBeenCalled();
+		expect(events.some((event) => event.kind === "consent_requested")).toBe(false);
+		const finished = events.find((event) => event.kind === "tool_call_finished");
+		expect(finished).toBeDefined();
+		expect(String((finished as { result: { error: string } }).result.error).startsWith("ConsentDeniedError")).toBe(
+			true,
+		);
+	});
+
+	it("runs a non-mutating tool normally when its category mode is always", async () => {
+		const run = vi.fn(async () => ({ ok: true as const, value: "fetched" }));
+		const registry = new ToolRegistry();
+		registry.register({
+			name: "web_fetch",
+			description: "Fetch",
+			schema: { type: "object", properties: {}, additionalProperties: false },
+			category: "web",
+			mutates: false,
+			run,
+		} satisfies ToolDef);
+		const consent = new ConsentManager(() => ({ vault_read: "always", vault_write: "ask", web: "always" }));
+		const { provider, streamCount } = toolCallThenText("web_fetch", {});
+
+		const events = await collect(new Agent(definition), provider, { tools: registry, consent });
+
+		expect(run).toHaveBeenCalledTimes(1);
+		expect(events.some((event) => event.kind === "consent_requested")).toBe(false);
+		expect(events.at(-1)).toEqual({ kind: "done", finishReason: "stop" });
+		expect(streamCount()).toBe(2);
 	});
 
 	it("ends the run after a failed tool call when stopOnFailure=true", async () => {

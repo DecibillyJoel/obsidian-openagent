@@ -102,7 +102,7 @@ describe("runTurn", () => {
 			mutates: true,
 			run: vi.fn(async () => ({ ok: true as const, value: null })),
 		} satisfies ToolDef<{ path: string; content: string }>);
-		const consent = new ConsentManager(() => ({ vault_read: "always", vault_write: "ask" }));
+		const consent = new ConsentManager(() => ({ vault_read: "always", vault_write: "ask", web: "always" }));
 		let streamCount = 0;
 		const provider: ModelProvider = {
 			stream: async function* () {

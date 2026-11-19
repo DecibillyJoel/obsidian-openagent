@@ -1,5 +1,14 @@
 import type { OpenAiToolSpec, ToolDef } from "../types";
 
+function isToolAvailable(tool: ToolDef): boolean {
+	try {
+		return tool.isAvailable?.() ?? true;
+	} catch {
+		// One throwing predicate hides one tool. It must not abort the whole spec.
+		return false;
+	}
+}
+
 export class ToolRegistry {
 	private readonly tools = new Map<string, ToolDef>();
 
@@ -12,11 +21,12 @@ export class ToolRegistry {
 	}
 
 	get(name: string): ToolDef | undefined {
-		return this.tools.get(name);
+		const tool = this.tools.get(name);
+		return tool && isToolAvailable(tool) ? tool : undefined;
 	}
 
 	list(): ToolDef[] {
-		return [...this.tools.values()];
+		return [...this.tools.values()].filter(isToolAvailable);
 	}
 
 	size(): number {

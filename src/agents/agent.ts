@@ -151,6 +151,18 @@ async function* executeAgentLoop(
 				continue;
 			}
 
+			if (opts.consent?.isRefused(toolDef.category)) {
+				const result: ToolResult = {
+					ok: false,
+					error: "ConsentDeniedError",
+					details: "This tool category is set to never.",
+				};
+				yield { kind: "tool_call_finished", id: call.id, result };
+				messages.push(toolMessage(call, result));
+				consentDenied = true;
+				continue;
+			}
+
 			if (toolDef.mutates && toolDef.requiresApproval !== false) {
 				if (!opts.consent) {
 					const result: ToolResult = { ok: false, error: "ConsentDeniedError: no consent manager" };

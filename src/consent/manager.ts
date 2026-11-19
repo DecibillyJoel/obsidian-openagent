@@ -3,11 +3,13 @@ import type { ConsentMode, ToolCategory, ToolDef } from "../types";
 export interface ConsentSettings {
 	vault_read: ConsentMode;
 	vault_write: ConsentMode;
+	web: ConsentMode;
 }
 
 export const DEFAULT_CONSENT: ConsentSettings = {
 	vault_read: "always",
 	vault_write: "ask",
+	web: "always",
 };
 
 export type ConsentChoice = "approve" | "reject" | "approve-session";
@@ -27,6 +29,10 @@ export class ConsentManager {
 
 	getMode(category: ToolCategory): ConsentMode {
 		return this.sessionOverrides[category] ?? this.getSettings()[category];
+	}
+
+	isRefused(category: ToolCategory): boolean {
+		return this.getMode(category) === "never";
 	}
 
 	resolveConsent(choice: ConsentChoice, id?: string): void {
@@ -49,10 +55,13 @@ export class ConsentManager {
 	}
 
 	async requestApproval(tool: ToolDef, _args: unknown, id?: string): Promise<boolean> {
-		if (!tool.mutates) return true;
 		const mode = this.getMode(tool.category);
-		if (mode === "always") return true;
+		// Only the "never" + non-mutating pair changes. It now refuses the call instead of ignoring the
+		// label. "always" and "ask" on a non-mutating tool still approve, because a prompt on every
+		// vault read would be hostile.
 		if (mode === "never") return false;
+		if (!tool.mutates) return true;
+		if (mode === "always") return true;
 
 		const choice = await new Promise<ConsentChoice>((resolve) => {
 			this.pending.push({ id, resolve, category: tool.category });
