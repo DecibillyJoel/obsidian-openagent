@@ -25,6 +25,9 @@ import type {
 
 const DEFAULT_MAX_STEPS = 8;
 
+/** Detail text of the refusal that the consent mode "never" produces for a whole category. */
+export const OA_CATEGORY_REFUSED_DETAILS = "This tool category is set to never.";
+
 interface BoundTools {
 	get(name: string): ToolDef | undefined;
 	toApiSpec(): OpenAiToolSpec[];
@@ -151,11 +154,18 @@ async function* executeAgentLoop(
 				continue;
 			}
 
-			if (opts.consent?.isRefused(toolDef.category)) {
+			if (!opts.consent) {
+				const result: ToolResult = { ok: false, error: "ConsentDeniedError: no consent manager" };
+				yield { kind: "tool_call_finished", id: call.id, result };
+				messages.push(toolMessage(call, result));
+				continue;
+			}
+
+			if (opts.consent.isRefused(toolDef.category)) {
 				const result: ToolResult = {
 					ok: false,
 					error: "ConsentDeniedError",
-					details: "This tool category is set to never.",
+					details: OA_CATEGORY_REFUSED_DETAILS,
 				};
 				yield { kind: "tool_call_finished", id: call.id, result };
 				messages.push(toolMessage(call, result));
@@ -164,12 +174,6 @@ async function* executeAgentLoop(
 			}
 
 			if (toolDef.mutates && toolDef.requiresApproval !== false) {
-				if (!opts.consent) {
-					const result: ToolResult = { ok: false, error: "ConsentDeniedError: no consent manager" };
-					yield { kind: "tool_call_finished", id: call.id, result };
-					messages.push(toolMessage(call, result));
-					continue;
-				}
 				yield { kind: "consent_requested", id: call.id, name: call.name };
 				const approved = await opts.consent.requestApproval(toolDef, validated.value, call.id);
 				if (!approved) {

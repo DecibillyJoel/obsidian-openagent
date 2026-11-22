@@ -30,7 +30,7 @@ export class ToolRegistry {
 	}
 
 	size(): number {
-		return this.tools.size;
+		return this.list().length;
 	}
 
 	toApiSpec(): OpenAiToolSpec[] {

@@ -24,6 +24,7 @@ import { oaBytesToDataUrl, oaDecodeImageToPng, oaImageUrlToPngDataUrl } from "./
 import { oaExtractDisplayedImageEmbeds } from "./images/references";
 import { oaPersistInlineModelImage } from "./images/model-images";
 import type { ExactPhraseAnchor } from "./agents/verifier";
+import { OA_CATEGORY_REFUSED_DETAILS } from "./agents/agent";
 import { PackConfigError, PackRunError, type PackRuntimeEvent, type PackRunResult, type PackRunTransparency } from "./packs/runtime";
 import type { AgentPack } from "./packs/types";
 import { isConfigured, type PluginSettings } from "./settings";
@@ -95,7 +96,7 @@ interface ToolCallRecord {
 	name: string;
 	args: unknown;
 	mutates: boolean;
-	status: "running" | "awaiting-consent" | "ok" | "error" | "denied";
+	status: "running" | "awaiting-consent" | "ok" | "error" | "denied" | "refused-category";
 	result?: ToolResult;
 	approvedPending?: boolean;
 	diffRows?: DiffRow[]; // undefined = not yet computed; [] = computed, nothing to show
@@ -1136,7 +1137,8 @@ export class ChatView extends ItemView {
 					if (tc) {
 						tc.result = ev.result;
 						if (ev.result.ok) tc.status = "ok";
-						else if (ev.result.error.startsWith("ConsentDeniedError")) tc.status = "denied";
+						else if (ev.result.error.startsWith("ConsentDeniedError"))
+							tc.status = ev.result.details === OA_CATEGORY_REFUSED_DETAILS ? "refused-category" : "denied";
 						else tc.status = "error";
 					}
 					if (tc?.name === "image_generate" && ev.result.ok) {
@@ -1795,7 +1797,7 @@ export class ChatView extends ItemView {
 		if (tc.mutates) cls.push("open-agent-tool-mutates");
 		if (tc.status === "ok") cls.push("open-agent-tool-ok");
 		if (tc.status === "error") cls.push("open-agent-tool-error");
-		if (tc.status === "denied") cls.push("open-agent-tool-denied");
+		if (tc.status === "denied" || tc.status === "refused-category") cls.push("open-agent-tool-denied");
 		if (tc.status === "awaiting-consent") cls.push("open-agent-tool-consent");
 
 		const card = parent.createEl("details", { cls: cls.join(" ") });
@@ -2540,6 +2542,8 @@ function statusLabel(s: ToolCallRecord["status"], toolName?: string): string {
 			return "error";
 		case "denied":
 			return "denied";
+		case "refused-category":
+			return "refused by category";
 	}
 }
 

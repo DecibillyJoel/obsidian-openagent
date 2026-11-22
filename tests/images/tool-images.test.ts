@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { ConsentManager } from "../../src/consent/manager";
 import { runTurn } from "../../src/loop";
 import { ToolRegistry } from "../../src/tools/registry";
 import type { ChatMessage, ModelProvider, ToolDef, ToolResult } from "../../src/types";
@@ -20,6 +21,10 @@ function makeRegistry(run: () => Promise<ToolResult>): ToolRegistry {
 		run,
 	} satisfies ToolDef<{ path: string }>);
 	return registry;
+}
+
+function alwaysConsent(): ConsentManager {
+	return new ConsentManager(() => ({ vault_read: "always", vault_write: "always", web: "always" }));
 }
 
 describe("runTurn image passthrough", () => {
@@ -60,6 +65,7 @@ describe("runTurn image passthrough", () => {
 
 		for await (const event of runTurn([{ role: "user", content: "hi" }], provider, {
 			tools: registry,
+			consent: alwaysConsent(),
 			resolveToolImages,
 		})) {
 			void event;
@@ -106,6 +112,7 @@ describe("runTurn image passthrough", () => {
 
 		for await (const event of runTurn([{ role: "user", content: "hi" }], provider, {
 			tools: registry,
+			consent: alwaysConsent(),
 			resolveToolImages,
 		})) {
 			void event;

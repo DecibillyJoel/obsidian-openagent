@@ -163,6 +163,30 @@ describe("Agent runtime guards", () => {
 		expect(String((finished as { result: { error: string } }).result.error).startsWith("ConsentDeniedError")).toBe(
 			true,
 		);
+		expect(events.at(-1)).toEqual({ kind: "done" });
+	});
+
+	it("refuses a non-mutating tool when no consent manager is supplied", async () => {
+		const run = vi.fn(async () => ({ ok: true as const, value: "Alpha body" }));
+		const registry = new ToolRegistry();
+		registry.register({
+			name: "vault_read",
+			description: "Read",
+			schema: { type: "object", properties: {}, additionalProperties: false },
+			category: "vault_read",
+			mutates: false,
+			run,
+		} satisfies ToolDef);
+		const { provider } = toolCallThenText("vault_read", {});
+
+		const events = await collect(new Agent(definition), provider, { tools: registry });
+
+		expect(run).not.toHaveBeenCalled();
+		const finished = events.find((event) => event.kind === "tool_call_finished");
+		expect(finished).toBeDefined();
+		expect(String((finished as { result: { error: string } }).result.error).startsWith("ConsentDeniedError")).toBe(
+			true,
+		);
 	});
 
 	it("runs a non-mutating tool normally when its category mode is always", async () => {
@@ -199,9 +223,10 @@ describe("Agent runtime guards", () => {
 			stopOnFailure: true,
 			run: vi.fn(async () => ({ ok: false as const, error: "ImageGenerationProviderError: boom" })),
 		} satisfies ToolDef);
+		const consent = new ConsentManager(() => ({ vault_read: "always", vault_write: "always", web: "always" }));
 		const { provider, streamCount } = toolCallThenText("image_generate", {});
 
-		const events = await collect(new Agent(definition), provider, { tools: registry });
+		const events = await collect(new Agent(definition), provider, { tools: registry, consent });
 
 		expect(streamCount()).toBe(1);
 		expect(events.some((event) => event.kind === "text")).toBe(false);
@@ -245,9 +270,10 @@ describe("Agent runtime guards", () => {
 			mutates: false,
 			run: vi.fn(async () => ({ ok: false as const, error: "Boom" })),
 		} satisfies ToolDef);
+		const consent = new ConsentManager(() => ({ vault_read: "always", vault_write: "always", web: "always" }));
 		const { provider, streamCount } = toolCallThenText("vault_read", {});
 
-		const events = await collect(new Agent(definition), provider, { tools: registry });
+		const events = await collect(new Agent(definition), provider, { tools: registry, consent });
 
 		expect(streamCount()).toBe(2);
 		expect(events.some((event) => event.kind === "text")).toBe(true);
@@ -264,9 +290,10 @@ describe("Agent runtime guards", () => {
 			mutates: false,
 			run: vi.fn(async () => ({ ok: true as const, value: null })),
 		} satisfies ToolDef);
+		const consent = new ConsentManager(() => ({ vault_read: "always", vault_write: "always", web: "always" }));
 		const { provider, streamCount } = providerThatAlwaysCallsATool("vault_read");
 
-		const events = await collect(new Agent(definition), provider, { tools: registry });
+		const events = await collect(new Agent(definition), provider, { tools: registry, consent });
 
 		expect(events.filter((event) => event.kind === "tool_call_started")).toHaveLength(8);
 		expect(streamCount()).toBe(8);

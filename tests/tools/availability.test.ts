@@ -73,11 +73,12 @@ describe("ToolRegistry availability gating", () => {
 		expect(registry.list().map((t) => t.name)).toEqual(["shown"]);
 	});
 
-	it("keeps size() reporting every registered tool", () => {
+	it("counts only the tools that list() and get() return", () => {
 		const registry = new ToolRegistry();
 		registry.register(makeTool("shown", () => true));
 		registry.register(makeTool("hidden", () => false));
 
-		expect(registry.size()).toBe(2);
+		expect(registry.size()).toBe(1);
+		expect(registry.size()).toBe(registry.list().length);
 	});
 });

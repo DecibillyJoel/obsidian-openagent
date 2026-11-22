@@ -55,11 +55,12 @@ describe("runTurn", () => {
 			},
 		};
 
+		const consent = new ConsentManager(() => ({ vault_read: "always", vault_write: "ask", web: "always" }));
 		const events = [];
 		for await (const event of runTurn(
 			[{ role: "user", content: "Tell me about Alpha" }],
 			provider,
-			{ systemPrompt: "Be concise", tools: registry },
+			{ systemPrompt: "Be concise", tools: registry, consent },
 		)) {
 			events.push(event);
 		}
@@ -157,5 +158,60 @@ describe("runTurn", () => {
 			},
 			{ kind: "done" },
 		]);
+	});
+
+	it("runs a non-mutating tool at consent mode ask without a prompt", async () => {
+		const toolRun = vi.fn(async () => ({ ok: true as const, value: "Alpha body" }));
+		const registry = new ToolRegistry();
+		registry.register({
+			name: "vault_read",
+			description: "Read a note",
+			schema: {
+				type: "object",
+				properties: { path: { type: "string" } },
+				required: ["path"],
+				additionalProperties: false,
+			},
+			category: "vault_read",
+			mutates: false,
+			run: toolRun,
+		} satisfies ToolDef<{ path: string }>);
+		const consent = new ConsentManager(() => ({ vault_read: "ask", vault_write: "ask", web: "ask" }));
+		let streamCount = 0;
+		const provider: ModelProvider = {
+			stream: async function* () {
+				if (streamCount++ === 0) {
+					yield {
+						kind: "tool_call_assembled" as const,
+						calls: [
+							{
+								id: "call-1",
+								name: "vault_read",
+								arguments: { path: "Notes/alpha.md" },
+								rawArguments: '{"path":"Notes/alpha.md"}',
+							},
+						],
+					};
+					yield { kind: "done" as const, finishReason: "tool_calls" as const };
+					return;
+				}
+				yield { kind: "text" as const, text: "Alpha body retrieved" };
+				yield { kind: "done" as const, finishReason: "stop" as const };
+			},
+		};
+
+		const events = [];
+		for await (const event of runTurn(
+			[{ role: "user", content: "Tell me about Alpha" }],
+			provider,
+			{ tools: registry, consent },
+		)) {
+			events.push(event);
+		}
+
+		expect(toolRun).toHaveBeenCalledTimes(1);
+		expect(events.some((event) => event.kind === "consent_requested")).toBe(false);
+		expect(events.some((event) => event.kind === "tool_call_finished" && event.result.ok === false)).toBe(false);
+		expect(events.at(-1)).toEqual({ kind: "done", finishReason: "stop" });
 	});
 });
