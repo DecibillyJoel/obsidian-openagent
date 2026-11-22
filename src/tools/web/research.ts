@@ -12,7 +12,7 @@ interface GeminiPart {
 }
 
 interface GeminiChunk {
-	web?: { title?: string; uri?: string };
+	web?: { title?: string; uri?: string } | null;
 }
 
 interface GeminiCandidate {
@@ -24,15 +24,21 @@ interface GeminiAnswer {
 	candidates?: GeminiCandidate[];
 }
 
-/** Parse a response body, and return `null` when the body is not a JSON object. */
+/** Parse a response body, and return `null` unless it is a JSON object that is not an array. */
 function oaParseGeminiAnswer(body: string): GeminiAnswer | null {
 	try {
 		const parsed: unknown = JSON.parse(body);
-		if (typeof parsed !== "object" || parsed === null) return null;
+		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
 		return parsed as GeminiAnswer;
 	} catch {
 		return null;
 	}
+}
+
+/** Read the text of a transport rejection, and hide the API key when the text holds it. */
+function oaCauseText(error: unknown, apiKey: string): string {
+	const text = error instanceof Error ? error.message : String(error);
+	return apiKey.length === 0 ? text : text.split(apiKey).join("[redacted]");
 }
 
 const ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models";
@@ -73,8 +79,9 @@ export function webResearchTool(getSettings: () => PluginSettings): ToolDef<WebR
 			const { apiKey, model } = oaGeminiSettings(getSettings());
 			if (apiKey.length === 0) return fail(`${REQUEST_REJECTED}: no Gemini API key is set`);
 
+			let transportError: unknown = null;
 			const response = await requestUrl({
-				url: `${ENDPOINT}/${model}:generateContent`,
+				url: `${ENDPOINT}/${encodeURIComponent(model)}:generateContent`,
 				method: "POST",
 				headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
 				body: JSON.stringify({
@@ -82,8 +89,11 @@ export function webResearchTool(getSettings: () => PluginSettings): ToolDef<WebR
 					tools: [{ googleSearch: {} }],
 				}),
 				throw: false,
-			}).catch(() => null);
-			if (!response) return fail(NETWORK_ERROR);
+			}).catch((error: unknown) => {
+				transportError = error;
+				return null;
+			});
+			if (!response) return fail(NETWORK_ERROR, { cause: oaCauseText(transportError, apiKey) });
 
 			if (response.status === 400 || response.status === 403) {
 				return fail(`${REQUEST_REJECTED}: Gemini refused the request with HTTP ${response.status}`);
@@ -106,7 +116,7 @@ export function webResearchTool(getSettings: () => PluginSettings): ToolDef<WebR
 			const text = (candidate.content?.parts ?? []).map((part) => part.text ?? "").join("");
 			const sources: ResearchSource[] = (candidate.groundingMetadata?.groundingChunks ?? [])
 				.map((chunk) => chunk.web)
-				.filter((web): web is { title?: string; uri?: string } => web !== undefined)
+				.filter((web): web is { title?: string; uri?: string } => web != null)
 				.map((web) => ({ title: web.title ?? "", uri: web.uri ?? "" }));
 
 			const value: ResearchAnswer = { text, sources, model };

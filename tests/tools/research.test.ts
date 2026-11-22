@@ -9,6 +9,8 @@ const KEY = "fake-gemini-key-not-a-real-secret";
 const DEFAULT_MODEL = "gemini-2.5-flash";
 const QUERY = "What changed in Obsidian 1.9?";
 const ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models";
+const NETWORK_ERROR = "GeminiNetworkError: the request to Gemini did not complete";
+const REDACTED = "[redacted]";
 
 const SUCCESS_JSON = {
 	candidates: [
@@ -85,12 +87,37 @@ describe("research tool", () => {
 		});
 	});
 
+	it("sends exactly the stated request options, with the throw of requestUrl off", async () => {
+		requestUrlMock.mockResolvedValueOnce(jsonResponse(200, SUCCESS_JSON));
+
+		await runResearch();
+
+		expect(requestUrlMock.mock.calls[0]?.[0]).toEqual({
+			url: `${ENDPOINT}/${DEFAULT_MODEL}:generateContent`,
+			method: "POST",
+			headers: { "x-goog-api-key": KEY, "Content-Type": "application/json" },
+			body: JSON.stringify({
+				contents: [{ role: "user", parts: [{ text: QUERY }] }],
+				tools: [{ googleSearch: {} }],
+			}),
+			throw: false,
+		});
+	});
+
 	it("sends the model from settings in the URL", async () => {
 		requestUrlMock.mockResolvedValueOnce(jsonResponse(200, SUCCESS_JSON));
 
 		await runResearch(settingsWith({ geminiModel: "gemini-2.5-pro" }));
 
 		expect(requestAt().url).toBe(`${ENDPOINT}/gemini-2.5-pro:generateContent`);
+	});
+
+	it("URL-encodes the model name", async () => {
+		requestUrlMock.mockResolvedValueOnce(jsonResponse(200, SUCCESS_JSON));
+
+		await runResearch(settingsWith({ geminiModel: "gemini/2.5 flash" }));
+
+		expect(requestAt().url).toBe(`${ENDPOINT}/gemini%2F2.5%20flash:generateContent`);
 	});
 
 	it("joins the candidate text parts and maps the grounding chunks to sources", async () => {
@@ -127,6 +154,68 @@ describe("research tool", () => {
 		const result = await runResearch();
 
 		expect(result).toEqual({ ok: true, value: { text: "Plain answer.", sources: [], model: DEFAULT_MODEL } });
+	});
+
+	it("skips a grounding chunk that has no web field, including a null web field", async () => {
+		requestUrlMock.mockResolvedValueOnce(
+			jsonResponse(200, {
+				candidates: [
+					{
+						content: { parts: [{ text: "Kept answer." }] },
+						groundingMetadata: {
+							groundingChunks: [
+								{},
+								{ web: null },
+								{ web: { title: "Kept source", uri: "https://example.com/kept" } },
+							],
+						},
+					},
+				],
+			}),
+		);
+
+		const result = await runResearch();
+
+		expect(result).toEqual({
+			ok: true,
+			value: {
+				text: "Kept answer.",
+				sources: [{ title: "Kept source", uri: "https://example.com/kept" }],
+				model: DEFAULT_MODEL,
+			},
+		});
+	});
+
+	it("maps a chunk with a missing title or uri to an empty string", async () => {
+		requestUrlMock.mockResolvedValueOnce(
+			jsonResponse(200, {
+				candidates: [
+					{
+						content: { parts: [{ text: "Answer." }] },
+						groundingMetadata: {
+							groundingChunks: [
+								{ web: { uri: "https://example.com/no-title" } },
+								{ web: { title: "No uri" } },
+							],
+						},
+					},
+				],
+			}),
+		);
+
+		const result = await runResearch();
+
+		expect(result).toEqual({
+			ok: true,
+			value: {
+				text: "Answer.",
+				sources: [
+					{ title: "", uri: "https://example.com/no-title" },
+					{ title: "No uri", uri: "" },
+				],
+				model: DEFAULT_MODEL,
+			},
+		});
 	});
 
 	it("is unavailable without a key and is then absent from the registry list", () => {
@@ -188,6 +277,31 @@ describe("research tool", () => {
 		expect(errorOf(result).startsWith("GeminiNetworkError")).toBe(true);
 	});
 
+	it("keeps the transport cause in the details of the failure", async () => {
+		requestUrlMock.mockRejectedValueOnce(new Error("socket hang up"));
+
+		const result = await runResearch();
+
+		expect(result).toEqual({ ok: false, error: NETWORK_ERROR, details: { cause: "socket hang up" } });
+	});
+
+	it("keeps a non-Error transport rejection as its text in the details", async () => {
+		requestUrlMock.mockRejectedValueOnce("socket hung up");
+
+		const result = await runResearch();
+
+		expect(result).toEqual({ ok: false, error: NETWORK_ERROR, details: { cause: "socket hung up" } });
+	});
+
+	it("hides the key inside the transport cause", async () => {
+		requestUrlMock.mockRejectedValueOnce(new Error(`rejected while sending ${KEY}`));
+
+		const result = await runResearch();
+
+		expect(JSON.stringify(result)).not.toContain(KEY);
+		expect(JSON.stringify(result)).toContain(REDACTED);
+	});
+
 	it("never returns the key in a success or a failure result", async () => {
 		requestUrlMock.mockResolvedValueOnce(jsonResponse(200, SUCCESS_JSON));
 		const success = await runResearch();
@@ -246,6 +360,17 @@ describe("research tool", () => {
 
 	it("maps a 200 with a non-JSON body to GeminiRequestRejected instead of throwing", async () => {
 		requestUrlMock.mockResolvedValueOnce(rawResponse(200, "<html><body>not a candidate list</body></html>"));
+
+		const result = await runResearch();
+
+		expect(result.ok).toBe(false);
+		expect(errorOf(result).startsWith("GeminiRequestRejected")).toBe(true);
+		expect(errorOf(result)).toContain("HTTP 200");
+		expect(errorOf(result)).not.toContain("GeminiNoAnswer");
+	});
+
+	it("rejects a JSON array body, because it is not a JSON object", async () => {
+		requestUrlMock.mockResolvedValueOnce(jsonResponse(200, []));
 
 		const result = await runResearch();
 
