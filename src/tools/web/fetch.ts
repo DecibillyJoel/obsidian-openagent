@@ -1,5 +1,5 @@
 import { requestUrl } from "obsidian";
-import type { ToolDef } from "../../types";
+import type { JsonSchema, ToolDef } from "../../types";
 import { oaParseHtml, type HtmlPage } from "../../web/html";
 import { defineTool, fail, ok } from "../define";
 
@@ -47,12 +47,12 @@ export interface WebToolArgs {
 }
 
 /** One fetched page, either parsed HTML or the raw body. */
-export type FetchedPage =
+type FetchedPage =
 	| { kind: "html"; url: string; status: number; page: HtmlPage }
 	| { kind: "raw"; url: string; status: number; text: string };
 
 /** The shared outcome of one fetch. The tools turn a failure into `fail`. */
-export type FetchOutcome = { ok: true; page: FetchedPage } | { ok: false; error: string };
+type FetchOutcome = { ok: true; page: FetchedPage } | { ok: false; error: string };
 
 export function oaTruncate(value: string, max: number): string {
 	return value.length > max ? `${value.slice(0, max)}${TRUNCATED_MARKER}` : value;
@@ -116,21 +116,29 @@ export async function oaFetchPage(url: string): Promise<FetchOutcome> {
 	return { ok: true, page: { kind: "html", url: target, status: response.status, page: oaParseHtml(body, target) } };
 }
 
+/** The url schema that `web_fetch` and `web_read` share. */
+export const WEB_URL_SCHEMA: JsonSchema = {
+	type: "object",
+	properties: {
+		url: { type: "string", description: "Absolute http or https URL to fetch or read." },
+	},
+	required: ["url"],
+};
+
+/** The tool fields that `web_fetch` and `web_read` share. */
+export const WEB_TOOL_DEFAULTS = {
+	category: "web",
+	mutates: false,
+	timeoutMs: 20_000,
+} as const;
+
 export function webFetchTool(): ToolDef<WebToolArgs> {
 	return defineTool<WebToolArgs>({
 		name: "web_fetch",
 		description:
 			"Fetch one http or https page and return its title, readable text and links. `requestUrl` does not report the final URL after a redirect, so `url` in the result is the URL that was requested while the content may be the page it redirected to.",
-		category: "web",
-		mutates: false,
-		timeoutMs: 20_000,
-		schema: {
-			type: "object",
-			properties: {
-				url: { type: "string", description: "Absolute http or https URL to fetch." },
-			},
-			required: ["url"],
-		},
+		...WEB_TOOL_DEFAULTS,
+		schema: WEB_URL_SCHEMA,
 		async run(args) {
 			const outcome = await oaFetchPage(args.url);
 			if (!outcome.ok) return fail(outcome.error);

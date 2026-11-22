@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { webTools } from "../../src/tools/web";
+import { webFetchTool } from "../../src/tools/web/fetch";
+import { webReadTool } from "../../src/tools/web/read";
 import type { ToolDef } from "../../src/types";
 import {
 	createMockAnchor,
@@ -58,11 +60,15 @@ function run(toolName: string, url: string): Promise<unknown> {
 	return toolNamed(toolName).run({ url }, {});
 }
 
+beforeEach(() => {
+	requestUrlMock.mockReset();
+});
+
 describe("webTools", () => {
 	it("registers web_fetch then web_read, both read-only and time-limited", () => {
 		const tools = webTools();
 		expect(tools.map((tool) => tool.name)).toEqual(["web_fetch", "web_read", "research"]);
-		for (const tool of tools.filter((candidate) => candidate.name !== "research")) {
+		for (const tool of [webFetchTool(), webReadTool()]) {
 			expect(tool.category).toBe("web");
 			expect(tool.mutates).toBe(false);
 			expect(tool.timeoutMs).toBe(20_000);
@@ -72,7 +78,7 @@ describe("webTools", () => {
 	});
 
 	it("states the redirect limitation in both descriptions", () => {
-		for (const tool of webTools().filter((candidate) => candidate.name !== "research")) {
+		for (const tool of [webFetchTool(), webReadTool()]) {
 			const limitation =
 				"`requestUrl` does not report the final URL after a redirect, so `url` in the result is the URL that was requested while the content may be the page it redirected to.";
 			expect(tool.description).toContain(limitation);
@@ -135,6 +141,21 @@ describe("web_fetch", () => {
 		expect(sanitizeHTMLToDomMock).not.toHaveBeenCalled();
 	});
 
+	it("fails on status 400", async () => {
+		reply({ status: 400, text: "bad request" });
+
+		expect(await run("web_fetch", PAGE_URL)).toEqual({ ok: false, error: "WebHttpError: HTTP 400" });
+	});
+
+	it("accepts status 399 and passes it through", async () => {
+		reply({ status: 399, text: "hello world", contentType: "text/plain" });
+
+		expect(await run("web_fetch", PAGE_URL)).toEqual({
+			ok: true,
+			value: { url: PAGE_URL, status: 399, title: "", text: "hello world", links: [] },
+		});
+	});
+
 	it("fails before a parse when the body is above 2 MB", async () => {
 		reply({ text: "x".repeat(2 * 1024 * 1024 + 1) });
 
@@ -147,10 +168,12 @@ describe("web_fetch", () => {
 	});
 
 	it("rejects a scheme that is not http or https", async () => {
-		const result = (await run("web_fetch", "ftp://example.com/file")) as { ok: false; error: string };
+		for (const toolName of ["web_fetch", "web_read"]) {
+			const result = (await run(toolName, "ftp://example.com/file")) as { ok: false; error: string };
 
-		expect(result.ok).toBe(false);
-		expect(result.error.startsWith("WebUrlRejected:")).toBe(true);
+			expect(result.ok).toBe(false);
+			expect(result.error.startsWith("WebUrlRejected:")).toBe(true);
+		}
 		expect(requestUrlMock).not.toHaveBeenCalled();
 	});
 
@@ -165,6 +188,14 @@ describe("web_fetch", () => {
 	it("truncates the text at 40 000 characters and says so", async () => {
 		reply({ text: `<html><body>${"a".repeat(40_001)}</body></html>` });
 		stagePage({ markdown: "a".repeat(40_001) });
+
+		const result = (await run("web_fetch", PAGE_URL)) as { ok: true; value: { text: string } };
+
+		expect(result.value.text).toBe(`${"a".repeat(40_000)}\n\n[truncated]`);
+	});
+
+	it("truncates the raw text at 40 000 characters too", async () => {
+		reply({ text: "a".repeat(40_001), contentType: "text/plain" });
 
 		const result = (await run("web_fetch", PAGE_URL)) as { ok: true; value: { text: string } };
 
