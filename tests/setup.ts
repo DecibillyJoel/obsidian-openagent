@@ -324,6 +324,7 @@ export interface MockHtmlElement {
 	textContent: string;
 	getAttribute(name: string): string | null;
 	setAttribute(name: string, value: string): void;
+	removeAttribute(name: string): void;
 }
 
 export interface MockHtmlFragment {
@@ -355,6 +356,9 @@ export function createMockAnchor(href: string, text: string): MockHtmlElement {
 			attributes.set(name, value);
 			setAttributeCalls.push({ element, name, value });
 		},
+		removeAttribute(name: string): void {
+			attributes.delete(name);
+		},
 	};
 	return element;
 }
@@ -367,11 +371,178 @@ export function createMockHtmlFragment(options: MockHtmlFragmentOptions = {}): M
 	};
 }
 
-const MOCK_ENTITIES: Record<string, string> = { amp: "&", apos: "'", gt: ">", lt: "<", nbsp: " ", quot: '"' };
+export interface MockHtmlDocument {
+	head: { querySelector(selector: string): MockHtmlElement | null };
+	querySelector(selector: string): MockHtmlElement | null;
+}
+
+interface MockTag {
+	name: string;
+	closing: boolean;
+	attributes: Map<string, string>;
+	/** Index just past the closing `>`. */
+	end: number;
+}
+
+/** Read the tag that starts at `start`. Return null when the markup is broken. */
+function readMockTag(html: string, start: number): MockTag | null {
+	let index = start + 1;
+	const closing = html[index] === "/";
+	if (closing) index += 1;
+	const nameStart = index;
+	while (index < html.length && /[A-Za-z0-9-]/.test(html[index])) index += 1;
+	const name = html.slice(nameStart, index).toLowerCase();
+	const attributes = new Map<string, string>();
+	while (index < html.length) {
+		const char = html[index];
+		if (char === ">") return { name, closing, attributes, end: index + 1 };
+		if (char === "/" || /\s/.test(char)) {
+			index += 1;
+			continue;
+		}
+		const attributeStart = index;
+		while (index < html.length && !/[\s=/>]/.test(html[index])) index += 1;
+		const attributeName = html.slice(attributeStart, index).toLowerCase();
+		while (index < html.length && /\s/.test(html[index])) index += 1;
+		if (html[index] !== "=") {
+			attributes.set(attributeName, "");
+			continue;
+		}
+		index += 1;
+		while (index < html.length && /\s/.test(html[index])) index += 1;
+		const quote = html[index];
+		if (quote === '"' || quote === "'") {
+			const valueEnd = html.indexOf(quote, index + 1);
+			if (valueEnd === -1) return null;
+			attributes.set(attributeName, html.slice(index + 1, valueEnd));
+			index = valueEnd + 1;
+			continue;
+		}
+		const valueStart = index;
+		while (index < html.length && !/[\s>]/.test(html[index])) index += 1;
+		attributes.set(attributeName, html.slice(valueStart, index));
+	}
+	return null;
+}
+
+function createMockDocumentElement(textContent: string, attributes: Map<string, string> = new Map()): MockHtmlElement {
+	return {
+		textContent,
+		getAttribute: (name: string) => attributes.get(name) ?? null,
+		setAttribute: (name: string, value: string) => {
+			attributes.set(name, value);
+		},
+		removeAttribute: (name: string) => {
+			attributes.delete(name);
+		},
+	};
+}
+
+/**
+ * Walk the html the way a browser does: skip comments, quoted attribute values
+ * and the raw text of script elements, then take the head title and any base.
+ */
+function parseMockDocument(html: string): MockHtmlDocument {
+	const lower = html.toLowerCase();
+	let title: MockHtmlElement | null = null;
+	let base: MockHtmlElement | null = null;
+	let inHead = false;
+	let index = html.indexOf("<");
+	while (index !== -1) {
+		if (html.startsWith("<!--", index)) {
+			const commentEnd = html.indexOf("-->", index + 4);
+			if (commentEnd === -1) break;
+			index = html.indexOf("<", commentEnd + 3);
+			continue;
+		}
+		if (html.startsWith("<!", index)) {
+			const declarationEnd = html.indexOf(">", index);
+			if (declarationEnd === -1) break;
+			index = html.indexOf("<", declarationEnd + 1);
+			continue;
+		}
+		const tag = readMockTag(html, index);
+		if (tag === null) break;
+		if (!tag.closing && (tag.name === "script" || tag.name === "style")) {
+			const rawEnd = lower.indexOf(`</${tag.name}`, tag.end);
+			if (rawEnd === -1) break;
+			const rawTag = readMockTag(html, rawEnd);
+			index = html.indexOf("<", rawTag === null ? rawEnd + 1 : rawTag.end);
+			continue;
+		}
+		if (tag.name === "head") inHead = !tag.closing;
+		if (tag.name === "base" && !tag.closing && base === null) {
+			base = createMockDocumentElement("", new Map([["href", tag.attributes.get("href") ?? ""]]));
+		}
+		if (tag.name === "title" && !tag.closing && inHead && title === null) {
+			// The content of a title is text: it holds no elements.
+			const contentEnd = lower.indexOf("</title", tag.end);
+			if (contentEnd === -1) break;
+			title = createMockDocumentElement(decodeMockEntities(html.slice(tag.end, contentEnd)));
+			index = html.indexOf("<", contentEnd);
+			continue;
+		}
+		index = html.indexOf("<", tag.end);
+	}
+	return {
+		head: {
+			querySelector: (selector: string) => (selector === "title" ? title : null),
+		},
+		querySelector: (selector: string) => (selector === "base[href]" && base !== null ? base : null),
+	};
+}
+
+/** Stand in for the browser parser that the module reads the title and base from. */
+export class MockDOMParser {
+	parseFromString(html: string): MockHtmlDocument {
+		return parseMockDocument(html);
+	}
+}
+
+// Node ships no DOMParser, so the module under test gets this one.
+(globalThis as { DOMParser?: unknown }).DOMParser = MockDOMParser;
+
+const MOCK_ENTITIES: Record<string, string> = {
+	amp: "&",
+	apos: "'",
+	bull: "\u2022",
+	cent: "\u00a2",
+	copy: "\u00a9",
+	deg: "\u00b0",
+	divide: "\u00f7",
+	euro: "\u20ac",
+	frac12: "\u00bd",
+	frac14: "\u00bc",
+	frac34: "\u00be",
+	gt: ">",
+	hellip: "\u2026",
+	laquo: "\u00ab",
+	ldquo: "\u201c",
+	lsquo: "\u2018",
+	lt: "<",
+	mdash: "\u2014",
+	middot: "\u00b7",
+	nbsp: " ",
+	ndash: "\u2013",
+	para: "\u00b6",
+	plusmn: "\u00b1",
+	pound: "\u00a3",
+	quot: '"',
+	raquo: "\u00bb",
+	rdquo: "\u201d",
+	reg: "\u00ae",
+	rsquo: "\u2019",
+	sect: "\u00a7",
+	shy: "\u00ad",
+	sup2: "\u00b2",
+	times: "\u00d7",
+	trade: "\u2122",
+	yen: "\u00a5",
+};
 
 /** Mirror the entity decode that a native `textContent` read performs. */
 function decodeMockEntities(value: string): string {
-	return value.replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/g, (match, body: string) => {
+	return value.replace(/&(#[xX][0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]*);/g, (match, body: string) => {
 		if (!body.startsWith("#")) return MOCK_ENTITIES[body] ?? match;
 		const hex = body[1] === "x" || body[1] === "X";
 		const code = Number.parseInt(body.slice(hex ? 2 : 1), hex ? 16 : 10);

@@ -12,10 +12,7 @@ import {
 
 const base = "https://example.com/docs/page.html";
 
-/**
- * Queue the fragment that the body parse returns. The title decode is a
- * separate call and falls through to the default mock implementation.
- */
+/** Queue the fragment that the body parse returns. */
 function queueFragment(options: MockHtmlFragmentOptions = {}): MockHtmlFragment {
 	const fragment = createMockHtmlFragment(options);
 	sanitizeHTMLToDomMock.mockReturnValueOnce(fragment);
@@ -24,24 +21,73 @@ function queueFragment(options: MockHtmlFragmentOptions = {}): MockHtmlFragment 
 
 describe("oaParseHtml title", () => {
 	it("reads and collapses the first title", () => {
-		queueFragment();
 		const page = oaParseHtml("<html><head><title>  Docs   Home  </title><title>Second</title></head></html>", base);
 		expect(page.title).toBe("Docs Home");
 	});
 
-	it("decodes entities through the native sanitiser", () => {
-		queueFragment();
-		expect(oaParseHtml("<html><head><title>Tom &amp; Jerry</title></head></html>", base).title).toBe("Tom & Jerry");
+	it("decodes named and numeric entities in the title", () => {
+		const html = "<html><head><title>Tom &amp; Jerry &mdash; &#65;&#X66;&#x67; &frac12;&hellip;</title></head></html>";
+		expect(oaParseHtml(html, base).title).toBe("Tom & Jerry \u2014 Afg \u00bd\u2026");
+	});
+
+	it("leaves an unknown entity as it stands", () => {
+		const html = "<html><head><title>A &nosuchentity; B</title></head></html>";
+		expect(oaParseHtml(html, base).title).toBe("A &nosuchentity; B");
 	});
 
 	it("ignores attributes on the title element", () => {
-		queueFragment();
 		expect(oaParseHtml('<html><head><title id="t" class="x">Spaced</title></head></html>', base).title).toBe("Spaced");
 	});
 
+	it("ignores a title inside a comment", () => {
+		const html = "<html><head><!-- <title>Fake</title> --></head><body><p>Real</p></body></html>";
+		expect(oaParseHtml(html, base).title).toBe("");
+	});
+
+	it("ignores a title inside an attribute value", () => {
+		const html = '<html><head></head><body><p title="<title>Fake</title>">Real</p></body></html>';
+		expect(oaParseHtml(html, base).title).toBe("");
+	});
+
+	it("ignores a title inside a script element", () => {
+		const html = '<html><head><script>var t = "<title>Fake</title>";</script><title>Real</title></head></html>';
+		expect(oaParseHtml(html, base).title).toBe("Real");
+	});
+
+	it("ignores a title outside the document head", () => {
+		const html = "<html><head><title>Real</title></head><body><svg><title>Icon</title></svg></body></html>";
+		expect(oaParseHtml(html, base).title).toBe("Real");
+	});
+
 	it("gives an empty title when absent", () => {
-		queueFragment();
 		expect(oaParseHtml("<p>Hi</p>", base).title).toBe("");
+	});
+});
+
+describe("oaParseHtml base href", () => {
+	it("resolves relative links against the base href", () => {
+		queueFragment({ anchors: [createMockAnchor("rel/page.html", "Rel")] });
+		const html = '<html><head><base href="https://cdn.test/site/"></head><body><a href="rel/page.html">Rel</a></body></html>';
+		expect(oaParseHtml(html, base).links).toEqual([{ text: "Rel", href: "https://cdn.test/site/rel/page.html" }]);
+	});
+
+	it("resolves a relative base href against the page url", () => {
+		queueFragment({ anchors: [createMockAnchor("x.html", "X")] });
+		const html = '<html><head><base href="../other/"></head></html>';
+		expect(oaParseHtml(html, base).links).toEqual([{ text: "X", href: "https://example.com/other/x.html" }]);
+	});
+
+	it("keeps the page url when the base href is unusable", () => {
+		queueFragment({ anchors: [createMockAnchor("/docs", "Docs")] });
+		const html = '<html><head><base href="http://["></head></html>';
+		expect(oaParseHtml(html, base).links).toEqual([{ text: "Docs", href: "https://example.com/docs" }]);
+	});
+
+	it("keeps the page url when the base element carries no href", () => {
+		queueFragment({ anchors: [createMockAnchor("/docs", "Docs")] });
+		expect(oaParseHtml("<html><head><base></head></html>", base).links).toEqual([
+			{ text: "Docs", href: "https://example.com/docs" },
+		]);
 	});
 });
 
@@ -86,8 +132,29 @@ describe("oaParseHtml text", () => {
 		expect(text("See [Docs](https://example.com/docs) now")).toBe("See Docs (https://example.com/docs) now");
 	});
 
+	it("unwraps a link whose label holds brackets", () => {
+		expect(text("See [a [b] c](https://example.com/x) now")).toBe("See a [b] c (https://example.com/x) now");
+	});
+
+	it("flattens a link nested inside a label", () => {
+		expect(text("[a [b](y)](x)")).toBe("a b (y) (x)");
+	});
+
+	it("keeps a link that spans two lines as literal text", () => {
+		expect(text("[multi\nline](https://example.com/x)")).toBe("[multi\nline](https://example.com/x)");
+	});
+
+	it("drops an image and its alt text", () => {
+		expect(text("See ![Pic](https://example.com/a.png) now")).toBe("See now");
+		expect(text("![a [b] c](x.png)")).toBe("");
+	});
+
 	it("drops heading, quote, rule and table markers", () => {
 		expect(text("# Head\n\n> Quoted\n\n---\n\n| A | B |")).toBe("Head\n\nQuoted\n\nA B");
+	});
+
+	it("drops a rule written with stars or underscores", () => {
+		expect(text("Above\n\n***\n\n___\n\n* * *\n\nBelow")).toBe("Above\n\nBelow");
 	});
 
 	it("removes markdown backslash escapes in one pass", () => {
@@ -102,6 +169,10 @@ describe("oaParseHtml text", () => {
 		expect(text(markdown.join("\n"))).toBe(expected.join("\n"));
 	});
 
+	it("keeps a run of blank lines inside a fenced block", () => {
+		expect(text("```\na\n\n\nb\n```")).toBe("a\n\n\nb");
+	});
+
 	it("treats a tilde fence as a code block", () => {
 		expect(text("~~~\na | b\n~~~")).toBe("a | b");
 	});
@@ -110,8 +181,20 @@ describe("oaParseHtml text", () => {
 		expect(text("Code:\n\n    a | b\n\n    \\# hash")).toBe("Code:\n\n    a | b\n\n    \\# hash");
 	});
 
+	it("keeps the indent of an opening indented line", () => {
+		expect(text("    indented start\nnext")).toBe("    indented start\nnext");
+	});
+
 	it("drops a table delimiter row and keeps the cells", () => {
 		expect(text("| A | B |\n| --- | :-- |\n| 1 | 2 |")).toBe("A B\n1 2");
+	});
+
+	it("drops a delimiter row inside a block quote", () => {
+		expect(text("> | A | B |\n> | --- | :-- |\n> | 1 | 2 |")).toBe("A B\n1 2");
+	});
+
+	it("flattens a table nested in a list item", () => {
+		expect(text("- Item\n\n    | A | B |\n    | --- | --- |\n    | 1 | 2 |")).toBe("Item\n\nA B\n1 2");
 	});
 
 	it("collapses 3 or more blank lines to one blank line", () => {
@@ -144,17 +227,26 @@ describe("oaParseHtml links", () => {
 	});
 
 	it("drops javascript, anchor-only and empty hrefs", () => {
-		queueFragment({
-			anchors: [
-				createMockAnchor("javascript:void(0)", "JS"),
-				createMockAnchor("#section", "Anchor"),
-				createMockAnchor("", "Empty"),
-				createMockAnchor("https://example.com/kept", "Kept"),
-			],
-		});
+		const scripted = createMockAnchor("javascript:void(0)", "JS");
+		const anchored = createMockAnchor("#section", "Anchor");
+		const empty = createMockAnchor("", "Empty");
+		queueFragment({ anchors: [scripted, anchored, empty, createMockAnchor("https://example.com/kept", "Kept")] });
 		const page = oaParseHtml("<p>x</p>", base);
 		expect(page.links).toEqual([{ text: "Kept", href: "https://example.com/kept" }]);
 		expect(setAttributeCalls.map((call) => call.value)).toEqual(["https://example.com/kept"]);
+		expect(scripted.getAttribute("href")).toBeNull();
+		expect(anchored.getAttribute("href")).toBeNull();
+		expect(empty.getAttribute("href")).toBeNull();
+	});
+
+	it("clears the href of a data or vbscript link", () => {
+		const data = createMockAnchor("data:text/html;base64,PHNjcmlwdD4=", "Data");
+		const vbscript = createMockAnchor("vbscript:msgbox(1)", "VBScript");
+		queueFragment({ anchors: [data, vbscript] });
+		const page = oaParseHtml("<p>x</p>", base);
+		expect(page.links).toEqual([]);
+		expect(data.getAttribute("href")).toBeNull();
+		expect(vbscript.getAttribute("href")).toBeNull();
 	});
 
 	it("collapses duplicate resolved hrefs and keeps the first text", () => {
@@ -195,6 +287,18 @@ describe("oaParseHtml on a long line", () => {
 
 		expect(page.text).toBe(line);
 		expect(elapsed).toBeLessThan(2_000);
+	});
+
+	it("rewrites 50 000 characters of link shapes under a second", () => {
+		const line = "[a](".repeat(12_500);
+		queueFragment({ markdown: line });
+
+		const started = Date.now();
+		const page = oaParseHtml("<p>x</p>", base);
+		const elapsed = Date.now() - started;
+
+		expect(page.text).toBe(line);
+		expect(elapsed).toBeLessThan(1_000);
 	});
 
 	it("still strips escapes, the prefix and the pipes on a long prose line", () => {
