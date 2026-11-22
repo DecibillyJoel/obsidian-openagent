@@ -973,6 +973,8 @@ describe("ChatView pack UI", () => {
 		const packRecoveryEl = new MockElement("div");
 		const packMobileBannerEl = new MockElement("div");
 		const sessionRecoveryEl = new MockElement("div");
+		const imageModelInputEl = new MockElement("select");
+		imageModelInputEl.parentElement = new MockElement("div");
 
 		Object.assign(view as unknown as Record<string, unknown>, {
 			sessionTitleEl,
@@ -983,6 +985,7 @@ describe("ChatView pack UI", () => {
 			packRecoveryEl,
 			packMobileBannerEl,
 			sessionRecoveryEl,
+			imageModelInputEl,
 			availablePacks: [],
 		});
 

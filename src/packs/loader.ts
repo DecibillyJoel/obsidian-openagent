@@ -12,7 +12,8 @@ export class PackValidationError extends Error {
 	}
 }
 
-export async function ensureDefaultPacks(app: App, pluginDir: string): Promise<void> {
+export async function ensureDefaultPacks(app: App, pluginDir: string | undefined): Promise<void> {
+	if (!pluginDir) return;
 	const packDir = `${pluginDir}/packs`;
 	if (!(await app.vault.adapter.exists(packDir))) {
 		await app.vault.adapter.mkdir(packDir);
@@ -24,7 +25,8 @@ export async function ensureDefaultPacks(app: App, pluginDir: string): Promise<v
 	await app.vault.adapter.write(`${packDir}/grounded-research.json`, JSON.stringify(groundedResearchDefault, null, 2));
 }
 
-export async function loadPacks(app: App, pluginDir: string): Promise<AgentPack[]> {
+export async function loadPacks(app: App, pluginDir: string | undefined): Promise<AgentPack[]> {
+	if (!pluginDir) return [];
 	const packDir = `${pluginDir}/packs`;
 	if (!(await app.vault.adapter.exists(packDir))) return [];
 	const listing = await app.vault.adapter.list(packDir).catch(() => ({ files: [] as string[] }));

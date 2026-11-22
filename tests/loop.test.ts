@@ -65,10 +65,15 @@ describe("runTurn", () => {
 		}
 
 		expect(toolRun).toHaveBeenCalledWith({ path: "Notes/alpha.md" }, { signal: undefined });
-		expect(seenMessages[0]).toEqual([
-			{ role: "system", content: "Be concise" },
-			{ role: "user", content: "Tell me about Alpha" },
-		]);
+		// The classic agent always sends its built-in prompt, and a caller's own prompt
+		// is appended after it, which the settings text calls "prepended to every
+		// conversation". Only the order and the seam are asserted here, so a change to
+		// the built-in wording does not break this test.
+		const systemMessage = seenMessages[0]?.[0];
+		const systemContent = typeof systemMessage?.content === "string" ? systemMessage.content : "";
+		expect(systemMessage?.role).toBe("system");
+		expect(systemContent.endsWith("Be concise")).toBe(true);
+		expect(seenMessages[0]?.[1]).toEqual({ role: "user", content: "Tell me about Alpha" });
 		expect(events).toEqual([
 			{
 				kind: "tool_call_started",
@@ -83,7 +88,7 @@ describe("runTurn", () => {
 				result: { ok: true, value: "Alpha body" },
 			},
 			{ kind: "text", text: "Answer from classic mode", degraded: undefined },
-			{ kind: "done" },
+			{ kind: "done", finishReason: "stop" },
 		]);
 	});
 

@@ -2054,7 +2054,7 @@ export class ChatView extends ItemView {
 				});
 				resultSection.createEl("div", {
 					cls: "open-agent-pack-result-meta",
-					text: formatDuration(agentWork.run.elapsedMs),
+					text: formatDuration(agentWork?.run.elapsedMs),
 				});
 				const resultBody = resultSection.createDiv({
 					cls: "open-agent-turn-body open-agent-pack-result-body",
