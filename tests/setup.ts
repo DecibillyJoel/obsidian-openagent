@@ -224,7 +224,10 @@ export function createMockApp(options?: {
 	};
 }
 
-export const requestUrlMock = vi.fn(async () => ({ status: 200, json: { data: [] } }));
+/** The reply `requestUrl` gives when a test installs no value of its own. */
+const defaultRequestUrl = async (): Promise<unknown> => ({ status: 200, json: { data: [] } });
+
+export const requestUrlMock = vi.fn(defaultRequestUrl);
 
 export const fetchMock = vi.fn();
 
@@ -530,7 +533,8 @@ export function setMobileMode(isMobile: boolean): void {
 
 beforeEach(() => {
 	setMobileMode(false);
-	requestUrlMock.mockClear();
+	requestUrlMock.mockReset();
+	requestUrlMock.mockImplementation(defaultRequestUrl);
 	NoticeMock.mockClear();
 	sanitizeHTMLToDomMock.mockReset();
 	sanitizeHTMLToDomMock.mockImplementation(defaultSanitizeHTMLToDom);

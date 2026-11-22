@@ -10,6 +10,13 @@ export interface HtmlPage {
 /** A fragment parse drops the document head, so read the title from the raw string. */
 const TITLE_PATTERN = /<title[^>]*>([\s\S]*?)<\/title>/i;
 const LINK_PATTERN = /\[([^\]]*)\]\(([^)]*)\)/g;
+/**
+ * The longest line the link unwrap reads. The pattern costs the square of the
+ * line length when a line holds `[` and no closing `]`, and the parse is
+ * synchronous, so one hostile line would freeze the UI. Longer lines keep
+ * every other step below.
+ */
+const UNWRAP_MAX_CHARS = 2_000;
 const LINE_PREFIX_PATTERN = /^[ \t]*(?:#{1,6}[ \t]+|[-*+][ \t]+|>[ \t]?)/;
 /** The characters a markdown backslash escape can protect. */
 const ESCAPE_PATTERN = /\\([\\`*_{}[\]()#+\-.!|<>~])/g;
@@ -55,7 +62,10 @@ function isDelimiterRow(line: string): boolean {
 }
 
 function stripMarkdownLine(line: string): string | null {
-	const unwrapped = line.replace(LINK_PATTERN, "$1 ($2)").replace(ESCAPE_PATTERN, "$1");
+	const unwrapped = (line.length <= UNWRAP_MAX_CHARS ? line.replace(LINK_PATTERN, "$1 ($2)") : line).replace(
+		ESCAPE_PATTERN,
+		"$1",
+	);
 	if (isDelimiterRow(unwrapped)) return null;
 	return collapseSpace(unwrapped.replace(LINE_PREFIX_PATTERN, "").replace(/\|/g, " "));
 }

@@ -116,7 +116,9 @@ export class OpenAgentSettingsTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("API key")
-			.setDesc("bearer token stored in plugin data, never in local storage or the vault.")
+			.setDesc(
+				"Stored in the vault's .obsidian/plugins/open-agent/data.json. Do not sync or share this vault if the key must stay private.",
+			)
 			.addText((txt) => {
 				txt.setPlaceholder("")
 					.setValue(this.plugin.settings.apiKey)
@@ -132,7 +134,9 @@ export class OpenAgentSettingsTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Gemini API key")
-			.setDesc("Key for the research tool. Stored in plugin data, never in local storage or the vault.")
+			.setDesc(
+				"Stored in the vault's .obsidian/plugins/open-agent/data.json. Do not sync or share this vault if the key must stay private.",
+			)
 			.addText((txt) => {
 				txt.setPlaceholder("")
 					.setValue(this.plugin.settings.geminiApiKey)

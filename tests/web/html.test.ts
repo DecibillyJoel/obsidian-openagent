@@ -183,3 +183,24 @@ describe("oaParseHtml links", () => {
 		expect(oaParseHtml("<p>Plain</p>", base).links).toEqual([]);
 	});
 });
+
+describe("oaParseHtml on a long line", () => {
+	it("parses a line of 200 000 open brackets well under a second", () => {
+		const line = "[".repeat(200_000);
+		queueFragment({ markdown: line });
+
+		const started = Date.now();
+		const page = oaParseHtml("<p>x</p>", base);
+		const elapsed = Date.now() - started;
+
+		expect(page.text).toBe(line);
+		expect(elapsed).toBeLessThan(2_000);
+	});
+
+	it("still strips escapes, the prefix and the pipes on a long prose line", () => {
+		const words = "a".repeat(3_000);
+		queueFragment({ markdown: `# ${words} \\[0\\] | b` });
+
+		expect(oaParseHtml("<p>x</p>", base).text).toBe(`${words} [0] b`);
+	});
+});

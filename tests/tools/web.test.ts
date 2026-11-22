@@ -220,3 +220,52 @@ describe("web_read", () => {
 		expect(result.value.markdown).toBe(`${"b".repeat(100_000)}\n\n[truncated]`);
 	});
 });
+
+describe("web_fetch host and network gates", () => {
+	const PRIVATE_HOST_REJECTED = "WebUrlRejected: only public http and https hosts are supported";
+
+	it("rejects a loopback, private, link-local or unspecified host", async () => {
+		const hosts = [
+			"http://127.0.0.1:27123/vault/",
+			"http://localhost:5173/",
+			"http://192.168.1.1/",
+			"http://10.0.0.5/",
+			"http://172.16.0.1/",
+			"http://172.31.255.255/",
+			"http://169.254.169.254/",
+			"http://0.0.0.0/",
+			"http://printer.local/",
+			"http://[::1]/",
+		];
+		for (const url of hosts) {
+			expect(await run("web_fetch", url)).toEqual({ ok: false, error: PRIVATE_HOST_REJECTED });
+		}
+		expect(requestUrlMock).not.toHaveBeenCalled();
+	});
+
+	it("still fetches a public host, including the edges of the private ranges", async () => {
+		for (const url of ["https://172.15.0.1/", "https://172.32.0.1/", "https://93.184.216.34/page"]) {
+			reply({ text: "hello world", contentType: "text/plain" });
+			expect(await run("web_fetch", url)).toEqual({
+				ok: true,
+				value: { url, status: 200, title: "", text: "hello world", links: [] },
+			});
+		}
+	});
+
+	it("reports a transport failure as a named error", async () => {
+		requestUrlMock.mockRejectedValueOnce(new Error("connect ECONNREFUSED 93.184.216.34:443"));
+
+		const result = (await run("web_fetch", PAGE_URL)) as { ok: false; error: string };
+
+		expect(result).toEqual({ ok: false, error: "WebNetworkError: connect ECONNREFUSED 93.184.216.34:443" });
+	});
+
+	it("reports a non-Error rejection as its text", async () => {
+		requestUrlMock.mockRejectedValueOnce("socket hung up");
+
+		const result = (await run("web_fetch", PAGE_URL)) as { ok: false; error: string };
+
+		expect(result).toEqual({ ok: false, error: "WebNetworkError: socket hung up" });
+	});
+});

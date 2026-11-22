@@ -21,6 +21,27 @@ const PARSED_CONTENT_TYPES = new Set(["text/html", "application/xhtml+xml"]);
 /** The one error for a URL that the tools cannot fetch. */
 const URL_REJECTED = "WebUrlRejected: only absolute http and https URLs are supported";
 
+/** The one error for a URL that points into a private network. */
+const PRIVATE_HOST_REJECTED = "WebUrlRejected: only public http and https hosts are supported";
+
+/**
+ * True for a loopback, private, link-local or unspecified hostname. The check
+ * reads the hostname only, so a public name that resolves to a private address
+ * still passes: `requestUrl` does not expose the resolved address.
+ */
+function isPrivateHost(hostname: string): boolean {
+	const host = hostname.toLowerCase().replace(/^\[/, "").replace(/\]$/, "");
+	if (host === "" || host === "localhost" || host.endsWith(".local")) return true;
+	if (host === "0.0.0.0" || host === "::1" || host.endsWith("::1")) return true;
+	if (host.startsWith("127.") || host.startsWith("10.")) return true;
+	if (host.startsWith("192.168.") || host.startsWith("169.254.")) return true;
+	if (host.startsWith("172.")) {
+		const second = Number.parseInt(host.split(".")[1] ?? "", 10);
+		return second >= 16 && second <= 31;
+	}
+	return false;
+}
+
 export interface WebToolArgs {
 	url: string;
 }
@@ -67,8 +88,17 @@ export async function oaFetchPage(url: string): Promise<FetchOutcome> {
 	if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
 		return { ok: false, error: URL_REJECTED };
 	}
+	if (isPrivateHost(parsed.hostname)) {
+		return { ok: false, error: PRIVATE_HOST_REJECTED };
+	}
 
-	const response = await requestUrl({ url: target, method: "GET", throw: false });
+	let response: Awaited<ReturnType<typeof requestUrl>>;
+	try {
+		response = await requestUrl({ url: target, method: "GET", throw: false });
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		return { ok: false, error: `WebNetworkError: ${message}` };
+	}
 	if (response.status >= 400) {
 		return { ok: false, error: `WebHttpError: HTTP ${response.status}` };
 	}
