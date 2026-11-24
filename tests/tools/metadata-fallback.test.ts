@@ -73,6 +73,7 @@ async function runTool(file: unknown, text: string, cache: MockCache | null) {
 		{} as never,
 	);
 	expect(result.ok).toBe(true);
+	if (!result.ok) throw new Error(result.error);
 	return result.value as {
 		frontmatter: Record<string, unknown> | null;
 		tags: string[];

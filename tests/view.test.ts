@@ -252,8 +252,8 @@ describe("ChatView pack UI", () => {
 		(view as unknown as { modeSelectEl: { value: string }; modelInputEl: { value: string } }).modelInputEl = {
 			value: "restored-classic-model",
 		};
-		vi.spyOn(view as never, "refreshHeader" as never).mockImplementation(() => undefined);
-		vi.spyOn(view as never, "refreshConfiguredState" as never).mockImplementation(() => undefined);
+		vi.spyOn(view as unknown as { refreshHeader(): void }, "refreshHeader").mockImplementation(() => undefined);
+		vi.spyOn(view as unknown as { refreshConfiguredState(): void }, "refreshConfiguredState").mockImplementation(() => undefined);
 
 		await (view as unknown as { handleModeChange(): Promise<void> }).handleModeChange();
 
@@ -381,7 +381,7 @@ describe("ChatView pack UI", () => {
 
 		findByClass(cards[0], "open-agent-claim-open")[0].click();
 		expect(openFile).toHaveBeenCalledWith(expect.objectContaining({ path: "notes/source.md" }));
-		expect(openFile.mock.calls[0]?.[0]).toBeInstanceOf(MockTFile);
+		expect((openFile.mock.calls as unknown as [[unknown]])[0]?.[0]).toBeInstanceOf(MockTFile);
 
 		expect(findByClass(parent, "open-agent-pack-model-footer")[0]?.textContent).toBe(
 			"Models used: Retriever — gemma-4-4b-it; Synthesizer — gemma-4-31b-it; Verifier — gemma-4-4b-it",
@@ -400,9 +400,9 @@ describe("ChatView pack UI", () => {
 		const parent = renderPackTurn(view, createAgentWorkTurn());
 
 		expect(parent.children[0]?.classList.contains("open-agent-pack-result")).toBe(true);
-		expect(textTree(parent.children[0] as HTMLElement)).toContain("Research result");
-		expect(textTree(parent.children[0] as HTMLElement)).toContain("1m 16s");
-		expect(findByClass(parent.children[0] as HTMLElement, "open-agent-pack-result-body")).toHaveLength(1);
+		expect(textTree(parent.children[0] as unknown as MockElement)).toContain("Research result");
+		expect(textTree(parent.children[0] as unknown as MockElement)).toContain("1m 16s");
+		expect(findByClass(parent.children[0] as unknown as MockElement, "open-agent-pack-result-body")).toHaveLength(1);
 		expect(parent.children[1]?.textContent).toBe("How this answer was built");
 		expect(parent.children[2]?.classList.contains("open-agent-pack-progress")).toBe(true);
 		expect(parent.children.at(-1)?.classList.contains("open-agent-pack-model-footer")).toBe(true);
@@ -517,7 +517,7 @@ describe("ChatView pack UI", () => {
 		findByClass(withWork, "open-agent-pack-step")[0].click();
 		findByClass(withWork, "open-agent-work-note-path")[0].click();
 		expect(openFile).toHaveBeenCalledWith(expect.objectContaining({ path: "notes/source.md" }));
-		expect(openFile.mock.calls[0]?.[0]).toBeInstanceOf(MockTFile);
+		expect((openFile.mock.calls as unknown as [[unknown]])[0]?.[0]).toBeInstanceOf(MockTFile);
 
 		const legacyPackTurn = renderPackTurn(view, {
 			packId: groundedResearchDefault.id,
@@ -826,7 +826,7 @@ describe("ChatView pack UI", () => {
 				},
 			},
 		}));
-		expect(textTree(parent.children[0] as HTMLElement)).toContain("1.5s");
+		expect(textTree(parent.children[0] as unknown as MockElement)).toContain("1.5s");
 		const steps = findByClass(parent, "open-agent-pack-step");
 		expect(textTree(steps[0])).not.toContain("Timing unavailable");
 		expect(textTree(steps[1])).toContain("9.8s");

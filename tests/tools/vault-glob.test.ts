@@ -43,6 +43,7 @@ function makeApp(paths: string[]) {
 async function listPaths(app: unknown, glob: string): Promise<string[]> {
 	const result = await listTool(app as never).run({ glob, type: "file" }, {} as never);
 	expect(result.ok).toBe(true);
+	if (!result.ok) throw new Error(result.error);
 	const value = result.value as { entries: Entry[] };
 	return value.entries.map((entry) => entry.path);
 }

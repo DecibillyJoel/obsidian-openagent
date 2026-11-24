@@ -87,6 +87,7 @@ describe("openAgentVaultImageTool resolution", () => {
 		const app = makeApp({ files: [{ path: "Nora Portrait.png" }] });
 		const result = await runImage(app, "Nora Portrait.png");
 		expect(result.ok).toBe(true);
+		if (!result.ok) throw new Error(result.error);
 		expect(result.value).toEqual({
 			path: "Nora Portrait.png",
 			displayInChat: true,
@@ -103,6 +104,7 @@ describe("openAgentVaultImageTool resolution", () => {
 		});
 		const result = await runImage(app, "[[portrait]]");
 		expect(result.ok).toBe(true);
+		if (!result.ok) throw new Error(result.error);
 		const value = result.value as { path: string; markdownEmbed: string; mimeType: string };
 		expect(value.path).toBe("Assets/portrait.webp");
 		expect(value.markdownEmbed).toBe("![[Assets/portrait.webp]]");
@@ -114,6 +116,7 @@ describe("openAgentVaultImageTool resolution", () => {
 		for (const input of ["![[Nora Portrait.png]]", "[[Nora Portrait.png|Nora]]", "[[Nora Portrait.png]]"]) {
 			const result = await runImage(app, input);
 			expect(result.ok).toBe(true);
+			if (!result.ok) throw new Error(result.error);
 			expect((result.value as { path: string }).path).toBe("Nora Portrait.png");
 		}
 	});
@@ -124,6 +127,7 @@ describe("openAgentVaultImageTool errors", () => {
 		const app = makeApp({ files: [] });
 		const result = await runImage(app, "missing.png");
 		expect(result.ok).toBe(false);
+		if (result.ok) throw new Error("expected a failure");
 		expect(result.error).toBe("ImageNotFound: missing.png");
 	});
 
@@ -131,12 +135,14 @@ describe("openAgentVaultImageTool errors", () => {
 		const app = makeApp({ files: [{ path: "notes.txt" }] });
 		const result = await runImage(app, "notes.txt");
 		expect(result.ok).toBe(false);
+		if (result.ok) throw new Error("expected a failure");
 		expect(result.error).toBe("UnsupportedImage: notes.txt. Use PNG, JPEG, WebP, or GIF.");
 	});
 
 	it("reports ImageTooLarge for an empty image and one above the limit", async () => {
 		const empty = await runImage(makeApp({ files: [{ path: "empty.png", size: 0 }] }), "empty.png");
 		expect(empty.ok).toBe(false);
+		if (empty.ok) throw new Error("expected a failure");
 		expect(empty.error).toBe("ImageTooLarge: empty.png exceeds the 10 MB display limit.");
 
 		const huge = await runImage(
@@ -144,6 +150,7 @@ describe("openAgentVaultImageTool errors", () => {
 			"huge.png",
 		);
 		expect(huge.ok).toBe(false);
+		if (huge.ok) throw new Error("expected a failure");
 		expect(huge.error).toBe("ImageTooLarge: huge.png exceeds the 10 MB display limit.");
 	});
 
@@ -151,6 +158,7 @@ describe("openAgentVaultImageTool errors", () => {
 		const app = makeApp({ files: [{ path: "fake.png", bytes: JPEG_BYTES }] });
 		const result = await runImage(app, "fake.png");
 		expect(result.ok).toBe(false);
+		if (result.ok) throw new Error("expected a failure");
 		expect(result.error).toBe("InvalidImage: fake.png");
 	});
 });

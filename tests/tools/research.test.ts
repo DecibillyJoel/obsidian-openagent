@@ -60,11 +60,17 @@ function requestAt(index = 0): {
 	headers: Record<string, string>;
 	body: string;
 } {
-	const call = requestUrlMock.mock.calls[index]?.[0] as
+	const call = recordedRequest(index) as
 		| { url: string; method?: string; headers?: Record<string, string>; body?: string }
 		| undefined;
 	if (!call) throw new Error("No request was made");
 	return { url: call.url, method: call.method ?? "GET", headers: call.headers ?? {}, body: call.body ?? "" };
+}
+
+/** The argument of the recorded `requestUrl` call at `index`, with no type of its own. */
+function recordedRequest(index: number): unknown {
+	const call = requestUrlMock.mock.calls[index] as unknown[] | undefined;
+	return call?.[0];
 }
 
 describe("research tool", () => {
@@ -92,7 +98,7 @@ describe("research tool", () => {
 
 		await runResearch();
 
-		expect(requestUrlMock.mock.calls[0]?.[0]).toEqual({
+		expect(recordedRequest(0)).toEqual({
 			url: `${ENDPOINT}/${DEFAULT_MODEL}:generateContent`,
 			method: "POST",
 			headers: { "x-goog-api-key": KEY, "Content-Type": "application/json" },

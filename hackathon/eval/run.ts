@@ -897,7 +897,8 @@ function renderFixtureResponse(
 		return JSON.stringify(payload);
 	}
 	if (agentId === "verifier") {
-		const prompt = [...messages].reverse().find((message) => message.role === "user")?.content ?? "";
+		const content = [...messages].reverse().find((message) => message.role === "user")?.content ?? "";
+		const prompt = typeof content === "string" ? content : "";
 		return JSON.stringify({
 			decisions: extractVerifierClaims(prompt).map(({ claim_id, claim }) => {
 				const status = expectedByText.get(normalizeWhitespace(claim)) ?? "unsupported";

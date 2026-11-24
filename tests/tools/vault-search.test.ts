@@ -65,6 +65,7 @@ describe("vault_search folder scope ordering", () => {
 		const app = makeApp({ files: ["Docs/Inside.md"], links: { Inside: "Docs/Inside.md" } });
 		const result = await runSearch(app, "[[Inside]]", { folder: "Missing" });
 		expect(result.ok).toBe(false);
+		if (result.ok) throw new Error("expected a failure");
 		expect(result.error).toBe("NotFound: Missing");
 	});
 
@@ -72,6 +73,7 @@ describe("vault_search folder scope ordering", () => {
 		const app = makeApp({ files: ["Docs/Inside.md"], links: { Inside: "Docs/Inside.md" } });
 		const result = await runSearch(app, "[[Inside]]", { folder: "Docs/Inside.md" });
 		expect(result.ok).toBe(false);
+		if (result.ok) throw new Error("expected a failure");
 		expect(result.error).toBe("NotAFolder: Docs/Inside.md");
 	});
 
@@ -84,6 +86,7 @@ describe("vault_search folder scope ordering", () => {
 		});
 		const result = await runSearch(app, "[[Outside]]", { folder: "Docs" });
 		expect(result.ok).toBe(true);
+		if (!result.ok) throw new Error(result.error);
 		const value = result.value as { matches: Array<{ path: string }>; strategy: string };
 		expect(value.strategy).toBe("fulltext");
 		expect(value.matches.map((match) => match.path)).not.toContain("Other/Outside.md");
@@ -97,6 +100,7 @@ describe("vault_search folder scope ordering", () => {
 		});
 		const result = await runSearch(app, "[[Inside]]", { folder: "Docs" });
 		expect(result.ok).toBe(true);
+		if (!result.ok) throw new Error(result.error);
 		const value = result.value as { matches: Array<{ path: string }>; strategy: string };
 		expect(value.strategy).toBe("linkpath");
 		expect(value.matches[0].path).toBe("Docs/Inside.md");
@@ -106,6 +110,7 @@ describe("vault_search folder scope ordering", () => {
 		const app = makeApp({ files: ["Other/Outside.md"], links: { Outside: "Other/Outside.md" } });
 		const result = await runSearch(app, "[[Outside]]");
 		expect(result.ok).toBe(true);
+		if (!result.ok) throw new Error(result.error);
 		const value = result.value as { strategy: string };
 		expect(value.strategy).toBe("linkpath");
 	});

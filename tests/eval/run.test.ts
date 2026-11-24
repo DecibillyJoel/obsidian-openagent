@@ -146,7 +146,8 @@ describe("runEvalHarness", () => {
 					return;
 				}
 
-				const prompt = messages.at(-1)?.content ?? "";
+				const content = messages.at(-1)?.content ?? "";
+				const prompt = typeof content === "string" ? content : "";
 				yield {
 					kind: "text",
 					text: JSON.stringify({
@@ -258,7 +259,8 @@ describe("runEvalHarness", () => {
 		const providerFactory = (_config: unknown, agentId: string): ModelProvider => ({
 			async *stream(messages: ChatMessage[]): AsyncIterable<StreamEvent> {
 				stageOrder.push(agentId);
-				const prompt = messages.at(-1)?.content ?? "";
+				const content = messages.at(-1)?.content ?? "";
+				const prompt = typeof content === "string" ? content : "";
 				if (agentId === "retriever") {
 					yield {
 						kind: "text",
@@ -402,7 +404,8 @@ describe("runEvalHarness", () => {
 					return;
 				}
 				// verifier
-				const prompt = messages.at(-1)?.content ?? "";
+				const content = messages.at(-1)?.content ?? "";
+				const prompt = typeof content === "string" ? content : "";
 				yield {
 					kind: "text",
 					text: JSON.stringify({

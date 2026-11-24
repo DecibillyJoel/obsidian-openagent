@@ -1,4 +1,4 @@
-import { beforeEach, vi } from "vitest";
+import { beforeEach, vi, type Mock } from "vitest";
 
 export class MockTFile {
 	path: string;
@@ -146,13 +146,13 @@ export interface MockFileCache {
 }
 
 export interface MockAdapter {
-	exists: ReturnType<typeof vi.fn>;
-	mkdir: ReturnType<typeof vi.fn>;
-	list: ReturnType<typeof vi.fn>;
-	read: ReturnType<typeof vi.fn>;
-	write: ReturnType<typeof vi.fn>;
-	remove: ReturnType<typeof vi.fn>;
-	rename: ReturnType<typeof vi.fn>;
+	exists: Mock<(path: string) => Promise<boolean>>;
+	mkdir: Mock<(path: string) => Promise<void>>;
+	list: Mock<(dir: string) => Promise<{ files: string[] }>>;
+	read: Mock<(path: string) => Promise<string>>;
+	write: Mock<(path: string, text: string) => Promise<void>>;
+	remove: Mock<(path: string) => Promise<void>>;
+	rename: Mock<(from: string, to: string) => Promise<void>>;
 }
 
 export interface MockVaultState {
@@ -166,22 +166,22 @@ export function createMockAdapter(initialFiles: Record<string, string> = {}): Mo
 	const hasPath = (path: string) =>
 		files.has(path) || [...files.keys()].some((file) => file.startsWith(path.endsWith("/") ? path : `${path}/`));
 	return {
-		exists: vi.fn(async (path: string) => hasPath(path)),
-		mkdir: vi.fn(async () => undefined),
-		list: vi.fn(async (dir: string) => ({
+		exists: vi.fn<(path: string) => Promise<boolean>>(async (path: string) => hasPath(path)),
+		mkdir: vi.fn<(path: string) => Promise<void>>(async () => undefined),
+		list: vi.fn<(dir: string) => Promise<{ files: string[] }>>(async (dir: string) => ({
 			files: [...files.keys()].filter((file) => file.startsWith(`${dir}/`)).sort(),
 		})),
-		read: vi.fn(async (path: string) => {
+		read: vi.fn<(path: string) => Promise<string>>(async (path: string) => {
 			if (!files.has(path)) throw new Error(`Missing file: ${path}`);
-			return files.get(path);
+			return files.get(path) as string;
 		}),
-		write: vi.fn(async (path: string, text: string) => {
+		write: vi.fn<(path: string, text: string) => Promise<void>>(async (path: string, text: string) => {
 			files.set(path, text);
 		}),
-		remove: vi.fn(async (path: string) => {
+		remove: vi.fn<(path: string) => Promise<void>>(async (path: string) => {
 			files.delete(path);
 		}),
-		rename: vi.fn(async (from: string, to: string) => {
+		rename: vi.fn<(from: string, to: string) => Promise<void>>(async (from: string, to: string) => {
 			if (!files.has(from)) throw new Error(`Missing file: ${from}`);
 			files.set(to, files.get(from) ?? "");
 			files.delete(from);

@@ -21,7 +21,7 @@ import {
 import { MockTFile } from "../setup";
 import { oaBufferToDataUrl } from "../../src/images/data-url";
 
-function pngBytes(padding = 4): Uint8Array {
+function pngBytes(padding = 4): Uint8Array<ArrayBuffer> {
 	const bytes = new Uint8Array(8 + padding);
 	bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
 	return bytes;
@@ -31,7 +31,7 @@ const JPEG_BYTES = new Uint8Array([0xff, 0xd8, 0xff, 0xe0]);
 const requestUrlMock = requestUrl as unknown as ReturnType<typeof vi.fn>;
 
 class MockOffscreenCanvas {
-	static png: Uint8Array = pngBytes();
+	static png: Uint8Array<ArrayBuffer> = pngBytes();
 
 	constructor(
 		public width: number,
@@ -47,7 +47,7 @@ class MockOffscreenCanvas {
 	}
 }
 
-function stubPngConversion(png: Uint8Array = pngBytes()): void {
+function stubPngConversion(png: Uint8Array<ArrayBuffer> = pngBytes()): void {
 	MockOffscreenCanvas.png = png;
 	vi.stubGlobal("OffscreenCanvas", MockOffscreenCanvas);
 	vi.stubGlobal(

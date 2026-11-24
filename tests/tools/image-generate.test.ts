@@ -94,9 +94,12 @@ function settings(overrides: Partial<PluginSettings> = {}): PluginSettings {
 		apiKey: "key",
 		model: "gpt-4o-mini",
 		imageModel: "google/gemini-3.1-flash-image-preview",
+		geminiApiKey: "",
+		geminiModel: "gemini-2.5-flash",
 		systemPrompt: "",
 		consent: {} as PluginSettings["consent"],
 		packProviderOverrides: {},
+		modelCategories: [],
 		...overrides,
 	};
 }
@@ -428,7 +431,7 @@ describe("openAgentImageGenerateTool", () => {
 			resolution: "4K",
 			quality: "high",
 		};
-		const result = await tool.run(legacyArgs as Parameters<typeof tool.run>[0], {});
+		const result = await tool.run(legacyArgs as unknown as Parameters<typeof tool.run>[0], {});
 		expect(result).toEqual({
 			ok: false,
 			error:
@@ -444,7 +447,7 @@ describe("openAgentImageGenerateTool", () => {
 			desiredName: "cat",
 			quality: "high",
 		};
-		const result = await tool.run(legacyArgs as Parameters<typeof tool.run>[0], {});
+		const result = await tool.run(legacyArgs as unknown as Parameters<typeof tool.run>[0], {});
 		expect(result).toEqual({
 			ok: false,
 			error:

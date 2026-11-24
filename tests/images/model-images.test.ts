@@ -6,7 +6,7 @@ function mockApp() {
 	return {
 		vault: {
 			getRoot: vi.fn(() => ({ children: [] })),
-			createBinary: vi.fn(async () => undefined),
+			createBinary: vi.fn(async (_path: string, _bytes: ArrayBuffer) => undefined),
 		},
 	};
 }

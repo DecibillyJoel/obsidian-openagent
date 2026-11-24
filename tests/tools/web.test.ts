@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { DEFAULT_SETTINGS } from "../../src/settings";
 import { webTools } from "../../src/tools/web";
 import { webFetchTool } from "../../src/tools/web/fetch";
 import { webReadTool } from "../../src/tools/web/read";
@@ -27,7 +28,7 @@ const EXAMPLE_HTML = [
 ].join("");
 
 function toolNamed(name: string): ToolDef {
-	const tool = webTools().find((candidate) => candidate.name === name);
+	const tool = webTools(() => DEFAULT_SETTINGS).find((candidate) => candidate.name === name);
 	if (!tool) throw new Error(`Missing tool: ${name}`);
 	return tool;
 }
@@ -66,7 +67,7 @@ beforeEach(() => {
 
 describe("webTools", () => {
 	it("registers web_fetch then web_read, both read-only and time-limited", () => {
-		const tools = webTools();
+		const tools = webTools(() => DEFAULT_SETTINGS);
 		expect(tools.map((tool) => tool.name)).toEqual(["web_fetch", "web_read", "research"]);
 		for (const tool of [webFetchTool(), webReadTool()]) {
 			expect(tool.category).toBe("web");

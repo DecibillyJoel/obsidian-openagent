@@ -283,7 +283,7 @@ describe("model categories section", () => {
 		requestUrlMock.mockResolvedValue(IMAGE_CATALOG);
 		const { container } = setup([{ id: "a", name: "A", kind: "image", models: [] }]);
 		await clickFetch(container);
-		const asked = requestUrlMock.mock.calls.map((call) => (call[0] as { url: string }).url);
+		const asked = requestUrlMock.mock.calls.map((call) => ((call as unknown[])[0] as { url: string }).url);
 		expect(asked).toEqual(["https://example.test/v1/images/models"]);
 	});
 });

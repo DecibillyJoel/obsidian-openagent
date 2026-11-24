@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import groundedResearchDefault from "../../src/packs/defaults/grounded-research.json";
+import rawGroundedResearchDefault from "../../src/packs/defaults/grounded-research.json";
 import { createMockApp } from "../setup";
 import type { PackRunFailure } from "../../src/packs/runtime";
 import type { AgentPack } from "../../src/packs/types";
+
+const groundedResearchDefault = rawGroundedResearchDefault as unknown as AgentPack;
 
 const retrieveEvidenceMock = vi.fn();
 const verifyClaimsMock = vi.fn();
@@ -762,7 +764,7 @@ describe("runPack", () => {
 		expect(result.transparency.retriever).not.toHaveProperty("content");
 		expect(result.transparency.retriever).not.toHaveProperty("score");
 		expect(result.transparency.synthesizer).not.toHaveProperty("prompt");
-		expect(result.transparency.verifier.reasons[0]).not.toHaveProperty("sourceQuote");
+		expect(result.transparency.verifier.reasons?.[0]).not.toHaveProperty("sourceQuote");
 		expect(result.modelsUsed).toEqual({
 			retriever: groundedResearchDefault.providers.retriever.model,
 			synthesizer: groundedResearchDefault.providers.synthesizer.model,
@@ -822,7 +824,7 @@ describe("runPack", () => {
 		try {
 			const { runPackForEval } = await import("../../src/packs/runtime");
 			await runPackForEval({
-				pack: groundedResearchDefault as import("../../src/packs/runtime").AgentPack,
+				pack: groundedResearchDefault,
 				query: "test",
 				app: createMockApp() as never,
 				verifierEnabled: false,
@@ -851,9 +853,9 @@ describe("runPack", () => {
 		try {
 			const { runPackForEval } = await import("../../src/packs/runtime");
 			await runPackForEval({
-				pack: groundedResearchDefault as AgentPack,
+				pack: groundedResearchDefault,
 				query: "test",
-				app: createMockApp(),
+				app: createMockApp() as never,
 				verifierEnabled: false,
 			});
 		} catch (error) {

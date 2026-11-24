@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { UndoBuffer, type CreateFolderOp, type MoveOp, type TrashMoveOp } from "../../src/consent/undo";
+import { UndoBuffer, type CreateFolderOp, type MoveOp, type TrashMoveOp, type UndoOp, type WriteOp } from "../../src/consent/undo";
+
+/** Narrows a recorded op to a write op, the only kind without a `kind` field. */
+function asWriteOp(op: UndoOp): WriteOp {
+	if ("kind" in op) throw new Error("Expected a write op");
+	return op;
+}
 
 describe("UndoBuffer record kinds", () => {
 	it("records a text write as an unkinded write op", () => {
 		const buffer = new UndoBuffer();
-		const op = buffer.record({ path: "notes/a.md", before: null, after: "hello" });
+		const op = asWriteOp(buffer.record({ path: "notes/a.md", before: null, after: "hello" }));
 		expect(op.path).toBe("notes/a.md");
 		expect(op.before).toBeNull();
 		expect(op.after).toBe("hello");
