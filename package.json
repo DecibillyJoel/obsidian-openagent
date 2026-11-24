@@ -16,6 +16,7 @@
     "build": "node esbuild.config.mjs production",
     "deploy": "node esbuild.config.mjs production && node deploy.mjs",
     "lint": "eslint --ext .ts --no-error-on-unmatched-pattern src tests hackathon/eval vitest.config.ts",
+    "typecheck:tests": "tsc -p tsconfig.tests.json",
     "test": "vitest",
     "test:watch": "vitest watch",
     "test:coverage": "vitest run --coverage",

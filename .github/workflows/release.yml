@@ -27,6 +27,8 @@ jobs:
 
       - run: npm ci
 
+      - run: npm run typecheck:tests
+
       - run: npm run build
 
       - name: Read the plugin version
