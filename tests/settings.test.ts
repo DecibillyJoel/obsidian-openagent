@@ -231,3 +231,133 @@ describe("fetching a model catalog in settings", () => {
 		expect(saved).toEqual([]);
 	});
 });
+
+/**
+ * Renders the Gemini model row for a stored model and key, and returns what the
+ * row painted. `notice` reads the container again after a fetch, because the row
+ * creates the failure notice only when a fetch fails.
+ */
+function renderGeminiModelSetting(
+	stored: string,
+	key: string,
+): { select: MockElement; textInputs: number; notice(): MockElement | undefined; settings: PluginSettings } {
+	const settings: PluginSettings = { ...DEFAULT_SETTINGS, geminiApiKey: key, geminiModel: stored };
+	const plugin = { settings, saveSettings: async () => undefined, manifest: { dir: "test" } };
+	const tab = new OpenAgentSettingsTab(createMockApp() as never, plugin as never);
+	const container = new MockElement("div");
+	const call = tab as unknown as { renderGeminiModelSetting(container: MockElement): void };
+	call.renderGeminiModelSetting(container);
+	const controls = settingControls.at(-1);
+	return {
+		select: controls?.select ?? new MockElement("select"),
+		textInputs: controls?.textInputs ?? 0,
+		notice: () => container.children.find((child) => child.tagName === "p"),
+		settings,
+	};
+}
+
+/** Clicks the row's Fetch button and waits for it. */
+async function clickGeminiFetch(): Promise<void> {
+	const handler = settingControls.at(-1)?.buttonHandlers[0];
+	if (!handler) throw new Error("the Gemini model row did not render a fetch button");
+	await handler();
+}
+
+/** A Gemini model list answer, in the shape the endpoint sends. */
+function geminiModelsReply(ids: string[]): string {
+	return JSON.stringify({
+		models: ids.map((id) => ({ name: `models/${id}`, supportedGenerationMethods: ["generateContent"] })),
+	});
+}
+
+describe("Gemini model dropdown in settings", () => {
+	beforeEach(() => {
+		settingControls.length = 0;
+	});
+
+	it("shows a text field while no Gemini key is set", () => {
+		const row = renderGeminiModelSetting("gemini-2.5-flash", "");
+		expect(row.textInputs).toBe(1);
+		expect(row.select.children).toEqual([]);
+	});
+
+	it("shows a dropdown once a Gemini key is set", () => {
+		const row = renderGeminiModelSetting("gemini-3.8-flash", "gem-key");
+		expect(row.textInputs).toBe(0);
+		expect(topLevelOptionValuesOf(row.select)).toEqual(["gemini-3.8-flash"]);
+	});
+
+	it("offers the default model when the stored model is blank", () => {
+		const row = renderGeminiModelSetting("", "gem-key");
+		expect(row.select.value).toBe(DEFAULT_SETTINGS.geminiModel);
+		expect(DEFAULT_SETTINGS.geminiModel).toBe("gemini-flash-latest");
+	});
+
+	it("keeps the stored model selected when the list holds it", async () => {
+		const row = renderGeminiModelSetting("gemini-2.5-pro", "gem-key");
+		requestUrlMock.mockResolvedValue({
+			status: 200,
+			text: geminiModelsReply(["gemini-2.5-pro", "gemini-3.8-flash"]),
+		});
+		await clickGeminiFetch();
+		expect(row.select.value).toBe("gemini-2.5-pro");
+		expect(optgroupValuesOf(row.select)).toEqual(["gemini-2.5-pro", "gemini-3.8-flash"]);
+	});
+
+	it("keeps a stored model the list missed and does not save it", async () => {
+		const row = renderGeminiModelSetting("gemini-9.9-gone", "gem-key");
+		requestUrlMock.mockResolvedValue({ status: 200, text: geminiModelsReply(["gemini-3.8-flash"]) });
+		await clickGeminiFetch();
+		expect(row.select.value).toBe("gemini-9.9-gone");
+		expect(optgroupValuesOf(row.select)).toEqual(["gemini-9.9-gone", "gemini-3.8-flash"]);
+		expect(row.settings.geminiModel).toBe("gemini-9.9-gone");
+	});
+
+	it("shows the fixed notice when the fetch returns nothing", async () => {
+		const row = renderGeminiModelSetting("gemini-2.5-flash", "gem-key");
+		requestUrlMock.mockResolvedValue({ status: 401, text: "{}" });
+		await clickGeminiFetch();
+		expect(row.notice()?.textContent).toBe("Could not fetch Gemini models — check the API key.");
+		expect(row.select.value).toBe("gemini-2.5-flash");
+	});
+
+	it("creates the notice only after a failed fetch", async () => {
+		const row = renderGeminiModelSetting("gemini-2.5-flash", "gem-key");
+		expect(row.notice()).toBeUndefined();
+
+		requestUrlMock.mockResolvedValue({ status: 200, text: geminiModelsReply(["gemini-3.8-flash"]) });
+		await clickGeminiFetch();
+		expect(row.notice()).toBeUndefined();
+
+		requestUrlMock.mockResolvedValue({ status: 401, text: "{}" });
+		await clickGeminiFetch();
+		expect(row.notice()?.textContent).toBe("Could not fetch Gemini models — check the API key.");
+	});
+
+	it("keeps the picked model selected when a later fetch runs", async () => {
+		const row = renderGeminiModelSetting("gemini-2.5-flash", "gem-key");
+		requestUrlMock.mockResolvedValue({
+			status: 200,
+			text: geminiModelsReply(["gemini-2.5-flash", "gemini-3.8-flash"]),
+		});
+		await clickGeminiFetch();
+
+		const pick = settingControls.at(-1)?.dropdownHandlers[0];
+		if (!pick) throw new Error("the Gemini model row did not render a dropdown");
+		await pick("gemini-3.8-flash");
+		expect(row.settings.geminiModel).toBe("gemini-3.8-flash");
+
+		await clickGeminiFetch();
+		expect(row.select.value).toBe("gemini-3.8-flash");
+	});
+
+	it("clears the notice on a later success", async () => {
+		const row = renderGeminiModelSetting("gemini-2.5-flash", "gem-key");
+		requestUrlMock.mockResolvedValue({ status: 401, text: "{}" });
+		await clickGeminiFetch();
+		requestUrlMock.mockResolvedValue({ status: 200, text: geminiModelsReply(["gemini-3.8-flash"]) });
+		await clickGeminiFetch();
+		expect(row.notice()?.textContent).toBe("");
+		expect(optgroupValuesOf(row.select)).toEqual(["gemini-2.5-flash", "gemini-3.8-flash"]);
+	});
+});

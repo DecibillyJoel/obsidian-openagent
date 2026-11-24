@@ -8,6 +8,7 @@ import { loadPacks } from "./packs/loader";
 import type { AgentPack } from "./packs/types";
 import { oaFetchModelIds, oaModelEligibleOrUnknown } from "./provider";
 import type { OpenAICompatibleConfig } from "./provider-config";
+import { oaGeminiTextModelIds } from "./tools/web/gemini-models";
 import type { ConsentMode } from "./types";
 
 export type ProviderId = "openai-compatible";
@@ -33,7 +34,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 	model: "gpt-4o-mini",
 	imageModel: "",
 	geminiApiKey: "",
-	geminiModel: "gemini-2.5-flash",
+	geminiModel: "gemini-flash-latest",
 	systemPrompt: "",
 	consent: { ...DEFAULT_CONSENT },
 	packProviderOverrides: {},
@@ -130,6 +131,8 @@ export class OpenAgentSettingsTab extends PluginSettingTab {
 				txt.inputEl.autocomplete = "off";
 			});
 
+		let geminiModelContainer: HTMLElement | null = null;
+
 		new Setting(containerEl).setName("Web research").setHeading();
 
 		new Setting(containerEl)
@@ -143,23 +146,15 @@ export class OpenAgentSettingsTab extends PluginSettingTab {
 					.onChange(async (v) => {
 						this.plugin.settings.geminiApiKey = v;
 						await this.plugin.saveSettings();
+						// A key turns the model row into a dropdown, so repaint it now.
+						if (geminiModelContainer) this.renderGeminiModelSetting(geminiModelContainer);
 					});
 				txt.inputEl.type = "password";
 				txt.inputEl.autocomplete = "off";
 			});
 
-		new Setting(containerEl)
-			.setName("Gemini model")
-			.setDesc("Model name for the research tool.")
-			.addText((txt) =>
-				txt
-					.setPlaceholder(DEFAULT_SETTINGS.geminiModel)
-					.setValue(this.plugin.settings.geminiModel)
-					.onChange(async (v) => {
-						this.plugin.settings.geminiModel = v;
-						await this.plugin.saveSettings();
-					}),
-			);
+		geminiModelContainer = containerEl.createDiv();
+		this.renderGeminiModelSetting(geminiModelContainer);
 
 		const modelContainer = containerEl.createDiv();
 		this.renderModelSetting(
@@ -411,6 +406,86 @@ export class OpenAgentSettingsTab extends PluginSettingTab {
 					catalog = models;
 					// Paint only. A fetch never saves a model, so it cannot switch the
 					// user to one they did not choose.
+					paint();
+				});
+			});
+	}
+
+	/**
+	 * Renders the Gemini model row. The list needs a Gemini key, so the row is a
+	 * text field until one is set, and a dropdown of text models after that.
+	 */
+	private renderGeminiModelSetting(container: HTMLElement): void {
+		container.empty();
+		const apiKey = storedString(this.plugin.settings.geminiApiKey).trim();
+		const storedModel = (): string =>
+			storedString(this.plugin.settings.geminiModel).trim() || DEFAULT_SETTINGS.geminiModel;
+
+		if (apiKey.length === 0) {
+			new Setting(container)
+				.setName("Gemini model")
+				.setDesc("Model name for the research tool. Set a Gemini API key to choose from a list.")
+				.addText((txt) =>
+					txt
+						.setPlaceholder(DEFAULT_SETTINGS.geminiModel)
+						.setValue(this.plugin.settings.geminiModel)
+						.onChange(async (v) => {
+							this.plugin.settings.geminiModel = v;
+							await this.plugin.saveSettings();
+						}),
+				);
+			return;
+		}
+
+		let selectEl: HTMLSelectElement | null = null;
+		let noticeEl: HTMLParagraphElement | null = null;
+		let catalog: string[] = [];
+
+		const paint = (): void => {
+			if (!selectEl) return;
+			// Read the live model. A pick changes it, and a later fetch must not put
+			// the value the row was built with back on the control.
+			const current = storedModel();
+			// The stored model stays selectable even when the list does not hold it.
+			const all = oaCatalogWithCurrent(catalog, current, () => true);
+			const pseudo: ModelSelectPseudoOption[] = [{ label: current, value: current }];
+			const groups = [
+				{ label: "Gemini models", options: all.map((value) => ({ value, available: true })) },
+			];
+			oaPaintModelSelect(selectEl, pseudo, groups);
+			selectEl.value = current;
+		};
+
+		new Setting(container)
+			.setName("Gemini model")
+			.setDesc("Model name for the research tool.")
+			.addDropdown((drop) => {
+				selectEl = drop.selectEl;
+				paint();
+				drop.setValue(storedModel());
+				drop.onChange(async (v) => {
+					if (v) {
+						this.plugin.settings.geminiModel = v;
+						await this.plugin.saveSettings();
+					}
+				});
+			})
+			.addButton((btn) => {
+				btn.setButtonText("Fetch models").onClick(async () => {
+					btn.setButtonText("Fetching…").setDisabled(true);
+					const models = await oaGeminiTextModelIds(apiKey);
+					btn.setButtonText("Fetch models").setDisabled(false);
+					if (models.length === 0) {
+						// Create the notice on the first failure only, so no empty box is
+						// painted before a fetch ever runs.
+						if (!noticeEl) noticeEl = container.createEl("p", { cls: "open-agent-notice" });
+						noticeEl.setText("Could not fetch Gemini models — check the API key.");
+						return;
+					}
+					// Paint only. A fetch never saves a model, so it cannot switch the
+					// user to one they did not choose.
+					noticeEl?.setText("");
+					catalog = models;
 					paint();
 				});
 			});

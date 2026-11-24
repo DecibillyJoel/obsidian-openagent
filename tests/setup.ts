@@ -577,13 +577,20 @@ class MockPluginSettingTab {
 export interface MockSettingControls {
 	select: MockElement;
 	buttonHandlers: Array<() => Promise<void>>;
+	dropdownHandlers: Array<(value: string) => Promise<void> | void>;
+	textInputs: number;
 }
 
 /** One record per constructed Setting, in construction order. */
 export const settingControls: MockSettingControls[] = [];
 
 class MockSetting {
-	private readonly controls: MockSettingControls = { select: new MockElement("select"), buttonHandlers: [] };
+	private readonly controls: MockSettingControls = {
+		select: new MockElement("select"),
+		buttonHandlers: [],
+		dropdownHandlers: [],
+		textInputs: 0,
+	};
 
 	constructor(_containerEl: unknown) {
 		settingControls.push(this.controls);
@@ -602,6 +609,7 @@ class MockSetting {
 	}
 
 	addDropdown(cb: (drop: { selectEl: MockElement; addOption(value: string, label: string): typeof drop; setValue(value: string): typeof drop; onChange(handler: (value: string) => void): typeof drop }) => void): this {
+		const controls = this.controls;
 		const drop = {
 			selectEl: this.controls.select,
 			addOption() {
@@ -610,7 +618,8 @@ class MockSetting {
 			setValue() {
 				return drop;
 			},
-			onChange() {
+			onChange(handler: (value: string) => void) {
+				controls.dropdownHandlers.push(handler);
 				return drop;
 			},
 		};
@@ -642,6 +651,7 @@ class MockSetting {
 		onChange(handler: (value: string) => void): typeof txt;
 		inputEl: { type: string; autocomplete: string };
 	}) => void): this {
+		this.controls.textInputs += 1;
 		const txt = {
 			setPlaceholder() {
 				return txt;

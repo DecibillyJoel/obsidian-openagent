@@ -6,7 +6,7 @@ import type { ToolDef, ToolResult } from "../../src/types";
 import { requestUrlMock } from "../setup";
 
 const KEY = "fake-gemini-key-not-a-real-secret";
-const DEFAULT_MODEL = "gemini-2.5-flash";
+const DEFAULT_MODEL = "gemini-flash-latest";
 const QUERY = "What changed in Obsidian 1.9?";
 const ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models";
 const NETWORK_ERROR = "GeminiNetworkError: the request to Gemini did not complete";
