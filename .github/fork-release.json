@@ -1,0 +1,16 @@
+{
+  "upstream": "nikitaclicks/obsidian-openagent",
+  "tagFormat": "{version}",
+  "versionFields": [
+    { "path": "manifest.json", "field": "version" },
+    { "path": "package.json", "field": "version" },
+    { "path": "versions.json", "addEntry": true }
+  ],
+  "lockfile": "package-lock.json",
+  "install": "npm ci",
+  "test": "npm run typecheck:tests",
+  "build": "npm run build",
+  "pack": "",
+  "assets": ["main.js", "manifest.json", "styles.css"],
+  "nodeVersion": "20"
+}
